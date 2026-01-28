@@ -1,0 +1,22 @@
+# Dataset cache
+*.cache
+
+# outputs / runs
+outputs/
+runs/
+datasets/
+
+# datasets
+/data/train/
+/data/val/
+
+# models
+*.onnx
+
+# python
+__pycache__/
+*.pyc
+
+# os
+.DS_Store
+Thumbs.db

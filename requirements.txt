@@ -1,0 +1,11 @@
+torch
+torchvision
+torchaudio
+ultralytics
+gradio
+opencv-python
+pillow
+numpy
+PySide6
+pyyaml
+PyQt5

@@ -1,0 +1,26 @@
+path: C:/Users/hwang/microscopy-yolov8/data
+train: train/images
+val: val/images
+
+names:
+  0: Basophil
+  1: Echinocytes
+  2: Elliptocyte
+  3: Eosinophil
+  4: Erythroblast
+  5: Hypochromia
+  6: Lymphocyte
+  7: Macrocyte
+  8: Microcyte
+  9: Monocyte
+  10: Neutrophil
+  11: Ovalocyte
+  12: Platelet
+  13: RBC-Cat
+  14: RBC-Dog
+  15: Schistocyte
+  16: Spherocyte
+  17: Stomatocyte
+  18: TargetCell
+  19: Teardrop
+  20: WBC
