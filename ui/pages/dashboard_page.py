@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -10,12 +11,15 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QTextEdit,
+    QFileDialog,
 )
 
 from core import scan_dataset
+from ui.utils import get_setting, set_setting
 
 
 class DashboardPage(QWidget):
+    dataset_root_changed = Signal(str)
     def __init__(self):
         super().__init__()
 
@@ -62,12 +66,18 @@ class DashboardPage(QWidget):
         card_layout = QVBoxLayout(card)
 
         input_row = QHBoxLayout()
-        self.dataset_path = QLineEdit(str(Path(__file__).resolve().parents[2] / "data"))
+        default_root = get_setting(
+            "dataset_root", str(Path(__file__).resolve().parents[2] / "data")
+        )
+        self.dataset_path = QLineEdit(default_root)
+        self.browse_btn = QPushButton("Browse")
+        self.browse_btn.clicked.connect(self.browse_dataset)
         self.scan_btn = QPushButton("Scan Dataset")
         self.scan_btn.clicked.connect(self.scan_dataset)
 
         input_row.addWidget(QLabel("Dataset Root:"))
         input_row.addWidget(self.dataset_path, 1)
+        input_row.addWidget(self.browse_btn)
         input_row.addWidget(self.scan_btn)
 
         self.summary = QTextEdit()
@@ -82,7 +92,10 @@ class DashboardPage(QWidget):
 
     def scan_dataset(self) -> None:
         try:
-            stats = scan_dataset(self.dataset_path.text().strip())
+            dataset_root = self.dataset_path.text().strip()
+            stats = scan_dataset(dataset_root)
+            set_setting("dataset_root", dataset_root)
+            self.dataset_root_changed.emit(dataset_root)
             lines = [
                 f"Dataset root: {stats.get('dataset_root', '')}",
                 f"Layout: {stats.get('layout', 'unknown')}",
@@ -109,3 +122,11 @@ class DashboardPage(QWidget):
             self.summary.setPlainText("\n".join(lines))
         except Exception as exc:
             self.summary.setPlainText(f"Error: {exc}")
+
+    def browse_dataset(self) -> None:
+        start_dir = self.dataset_path.text().strip()
+        if not start_dir:
+            start_dir = str(Path(__file__).resolve().parents[2])
+        folder = QFileDialog.getExistingDirectory(self, "Select Dataset Root", start_dir)
+        if folder:
+            self.dataset_path.setText(folder)

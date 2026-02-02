@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 from PySide6.QtCore import QSettings
 
@@ -27,6 +28,8 @@ def find_latest_model(base_dir: Path) -> Path | None:
 
 
 def project_root() -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)
     return Path(__file__).resolve().parents[1]
 
 

@@ -20,3 +20,8 @@ __pycache__/
 # os
 .DS_Store
 Thumbs.db
+
+build/
+dist/
+*.spec
+__pycache__/

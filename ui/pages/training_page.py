@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QProgressBar,
     QGridLayout,
+    QFileDialog,
 )
 
 from core import build_val_split, get_run_outputs, scan_dataset_from_yaml, train_yolov8_stream
@@ -133,6 +134,8 @@ class TrainingPage(QWidget):
         default_yaml = get_setting("dataset_yaml", str(default_yaml_path()))
         self.data_yaml = QLineEdit(default_yaml)
         self.data_yaml.setReadOnly(True)
+        self.browse_yaml_btn = QPushButton("Browse")
+        self.browse_yaml_btn.clicked.connect(self.browse_yaml)
         self.model_name = QComboBox()
         self.model_name.addItems(
             [
@@ -159,7 +162,10 @@ class TrainingPage(QWidget):
         self.model_name.setCurrentText(get_setting("train_model", "yolov8n.pt"))
         self.device.setCurrentText(get_setting("train_device", "auto"))
 
-        dataset_layout.addRow("Dataset YAML:", self.data_yaml)
+        yaml_row = QHBoxLayout()
+        yaml_row.addWidget(self.data_yaml, 1)
+        yaml_row.addWidget(self.browse_yaml_btn)
+        dataset_layout.addRow("Dataset YAML:", yaml_row)
         dataset_layout.addRow("Model:", self.model_name)
         dataset_layout.addRow("Device:", self.device)
 
@@ -359,3 +365,18 @@ class TrainingPage(QWidget):
         self.limit_val.setEnabled(enabled)
         self.check_btn.setEnabled(enabled)
         self.regen_val_btn.setEnabled(enabled)
+
+    def set_dataset_root(self, dataset_root: str) -> None:
+        # Align training YAML with dashboard dataset root
+        root = Path(dataset_root)
+        yaml_path = root / "cell.yaml"
+        if yaml_path.exists():
+            self.data_yaml.setText(str(yaml_path))
+            set_setting("dataset_yaml", str(yaml_path))
+
+    def browse_yaml(self) -> None:
+        start_dir = str(Path(self.data_yaml.text().strip()).parent) if self.data_yaml.text().strip() else str(Path(__file__).resolve().parents[2])
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select Dataset YAML", start_dir, "YAML Files (*.yaml *.yml)")
+        if file_path:
+            self.data_yaml.setText(file_path)
+            set_setting("dataset_yaml", file_path)

@@ -195,6 +195,8 @@ class InferencePage(QWidget):
             if latest is not None:
                 default_weights = str(latest)
         self.weights_edit = QLineEdit(default_weights)
+        self.weights_browse = QPushButton("Browse")
+        self.weights_browse.clicked.connect(self.browse_weights)
         self.image_edit = QLineEdit(get_setting("infer_image", ""))
         browse_btn = QPushButton("Browse")
         browse_btn.clicked.connect(self.browse_image)
@@ -206,7 +208,10 @@ class InferencePage(QWidget):
         image_row.addWidget(self.image_edit, 1)
         image_row.addWidget(browse_btn)
 
-        form.addRow("Weights:", self.weights_edit)
+        weights_row = QHBoxLayout()
+        weights_row.addWidget(self.weights_edit, 1)
+        weights_row.addWidget(self.weights_browse)
+        form.addRow("Weights:", weights_row)
         form.addRow("", self.find_latest_btn)
         form.addRow("Image:", image_row)
 
@@ -282,11 +287,14 @@ class InferencePage(QWidget):
         self.save_anylabel = QCheckBox("Save X-AnyLabeling JSON")
         self.save_anylabel.setChecked(get_setting("save_xanylabel", "1") == "1")
         self.output_dir = QLineEdit(get_setting("xanylabel_dir", "outputs/xanylabeling"))
+        self.output_browse = QPushButton("Browse")
+        self.output_browse.clicked.connect(self.browse_output_dir)
         self.open_xanylabel_btn = QPushButton("Open X-AnyLabeling")
         self.open_xanylabel_btn.clicked.connect(self.open_xanylabeling)
         output_row = QHBoxLayout()
         output_row.addWidget(QLabel("Output dir:"))
         output_row.addWidget(self.output_dir, 1)
+        output_row.addWidget(self.output_browse)
 
         control_layout.addLayout(zoom_row)
         control_layout.addWidget(self.save_anylabel)
@@ -306,6 +314,22 @@ class InferencePage(QWidget):
         if file_path:
             self.image_edit.setText(file_path)
             set_setting("infer_browse_dir", str(Path(file_path).parent))
+
+    def browse_weights(self) -> None:
+        start_dir = str(Path(self.weights_edit.text().strip()).parent) if self.weights_edit.text().strip() else str(project_root())
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select Weights", start_dir, "Weights (*.pt)")
+        if file_path:
+            self.weights_edit.setText(file_path)
+            set_setting("weights_path", file_path)
+
+    def browse_output_dir(self) -> None:
+        start_dir = self.output_dir.text().strip()
+        if not start_dir:
+            start_dir = str(project_root())
+        folder = QFileDialog.getExistingDirectory(self, "Select Output Folder", start_dir)
+        if folder:
+            self.output_dir.setText(folder)
+            set_setting("xanylabel_dir", folder)
 
     def auto_find_latest(self) -> None:
         latest = find_latest_model(project_root() / "runs" / "detect")
@@ -419,9 +443,7 @@ class InferencePage(QWidget):
         output_json = None
         if self.last_xanylabel_json and self.last_xanylabel_json.exists():
             output_json = str(self.last_xanylabel_json.resolve())
-        cmd = [
-            sys.executable,
-            str(app_py),
+        args = [
             "--filename",
             image_path,
             "--output",
@@ -431,11 +453,24 @@ class InferencePage(QWidget):
             "--work-dir",
             str(Path(output_dir).resolve()),
         ]
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--xanylabeling"] + args
+        else:
+            cmd = [sys.executable, str(app_py)] + args
         try:
             subprocess.Popen(cmd, cwd=str(xany_root))
             self.status_label.setText("Status: X-AnyLabeling launched")
         except Exception as exc:
             self.status_label.setText(f"Status: launch failed ({exc})")
+
+    def set_dataset_root(self, dataset_root: str) -> None:
+        # Align weights path with dashboard dataset root's parent (project root)
+        root = Path(dataset_root)
+        project_root_guess = root.parent if root.name.lower() == "data" else root
+        weights = project_root_guess / "runs" / "detect" / "cells" / "weights" / "best.pt"
+        if weights.exists():
+            self.weights_edit.setText(str(weights))
+            set_setting("weights_path", str(weights))
 
     @staticmethod
     def _fixed_label_mapping() -> dict[int, str]:
