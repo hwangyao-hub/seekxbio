@@ -37,11 +37,19 @@ Inference + counting:
 python scripts/infer_and_count.py --weights runs/detect/train/weights/best.pt --source path/to/image.png --imgsz 640 --conf 0.25
 ```
 
-Launch UI:
+Launch Desktop UI (PySide6):
+
+```
+python main.py
+```
+
+Launch Web UI (Gradio):
 
 ```
 python app.py
 ```
+
+Then open your browser at `http://localhost:7860`
 
 ## 3) Notes for microscopy
 

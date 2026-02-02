@@ -9,3 +9,4 @@ numpy
 PySide6
 pyyaml
 PyQt5
+matplotlib
