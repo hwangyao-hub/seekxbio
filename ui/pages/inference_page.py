@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
 from PIL.ImageQt import ImageQt
 
 from core import export_xanylabeling_json, infer_and_count
+from core.constants import CLASS_NAMES_CN, DEVICE_OPTIONS
 from ui.utils import default_weights_path, find_latest_model, get_setting, project_root, set_setting
 
 
@@ -98,6 +100,7 @@ class InferenceWorker(QThread):
         conf: float,
         iou: float,
         device: str,
+        isolate: bool = True,
         label_mapping: dict[int, str] | None = None,
     ):
         super().__init__()
@@ -107,10 +110,35 @@ class InferenceWorker(QThread):
         self.conf = conf
         self.iou = iou
         self.device = device
+        self.isolate = isolate
         self.label_mapping = label_mapping
 
     def run(self) -> None:
         try:
+            if self.isolate:
+                payload = self._run_isolated()
+            else:
+                vis_img, counts, total, dets = infer_and_count(
+                    weights=self.weights,
+                    source_image=self.image_path,
+                    imgsz=self.imgsz,
+                    conf=self.conf,
+                    iou=self.iou,
+                    device=self.device,
+                    return_dets=True,
+                    label_mapping=self.label_mapping,
+                )
+                payload = (vis_img, counts, total, dets)
+            self.finished.emit(payload)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+    def _run_isolated(self) -> tuple[object, dict[int, int], int, list[dict]]:
+        from PIL import Image
+
+        root = project_root()
+        script_path = root / "scripts" / "infer_and_count.py"
+        if getattr(sys, "frozen", False) or not script_path.exists():
             vis_img, counts, total, dets = infer_and_count(
                 weights=self.weights,
                 source_image=self.image_path,
@@ -121,9 +149,59 @@ class InferenceWorker(QThread):
                 return_dets=True,
                 label_mapping=self.label_mapping,
             )
-            self.finished.emit((vis_img, counts, total, dets))
-        except Exception as exc:
-            self.failed.emit(str(exc))
+            return vis_img, counts, total, dets
+        save_dir = root / "outputs" / "infer"
+        save_dir.mkdir(parents=True, exist_ok=True)
+        image_src = Path(self.image_path)
+        out_image = save_dir / f"{image_src.stem}_pred.png"
+        out_counts = save_dir / f"{image_src.stem}_counts.json"
+        out_dets = save_dir / f"{image_src.stem}_dets.json"
+
+        cmd = [
+            sys.executable,
+            str(script_path),
+            "--weights",
+            self.weights,
+            "--source",
+            self.image_path,
+            "--imgsz",
+            str(self.imgsz),
+            "--conf",
+            str(self.conf),
+            "--iou",
+            str(self.iou),
+            "--device",
+            self.device,
+            "--save_dir",
+            str(save_dir),
+            "--save_dets",
+            str(out_dets),
+        ]
+        if self.label_mapping:
+            cmd.append("--use_cn_labels")
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if proc.returncode != 0:
+            stderr = (proc.stdout or "") + "\n" + (proc.stderr or "")
+            raise RuntimeError(f"Inference failed (code {proc.returncode}).\n{stderr.strip()}")
+        if not out_image.exists():
+            raise FileNotFoundError(f"Missing output image: {out_image}")
+        vis_img = Image.open(out_image).convert("RGB")
+        counts_raw = {}
+        if out_counts.exists():
+            counts_raw = json.loads(out_counts.read_text(encoding="utf-8"))
+        counts = {int(k): int(v) for k, v in counts_raw.items()}
+        dets: list[dict] = []
+        if out_dets.exists():
+            dets = json.loads(out_dets.read_text(encoding="utf-8"))
+        total = sum(counts.values())
+        return vis_img, counts, total, dets
 
 
 class InferencePage(QWidget):
@@ -231,7 +309,7 @@ class InferencePage(QWidget):
         self.iou.setValue(0.45)
 
         self.device = QComboBox()
-        self.device.addItems(["auto", "cpu", "cuda"])
+        self.device.addItems(DEVICE_OPTIONS)
         self.device.setCurrentText(get_setting("infer_device", "auto"))
         self.device.currentTextChanged.connect(self.on_device_changed)
 
@@ -243,8 +321,11 @@ class InferencePage(QWidget):
         self.run_btn = QPushButton("Run Inference")
         self.run_btn.setObjectName("primary")
         self.run_btn.clicked.connect(self.run_inference)
+        self.isolate_infer = QCheckBox("Isolate inference (safer)")
+        self.isolate_infer.setChecked(get_setting("infer_isolate", "1") == "1")
 
         control_layout.addLayout(form)
+        control_layout.addWidget(self.isolate_infer)
         control_layout.addWidget(self.run_btn)
 
         # Right panel (results)
@@ -353,6 +434,7 @@ class InferencePage(QWidget):
         set_setting("infer_image", image_path)
         set_setting("save_xanylabel", "1" if self.save_anylabel.isChecked() else "0")
         set_setting("xanylabel_dir", self.output_dir.text().strip())
+        set_setting("infer_isolate", "1" if self.isolate_infer.isChecked() else "0")
 
         self.run_btn.setEnabled(False)
         self.status_label.setText("Status: Running...")
@@ -363,7 +445,8 @@ class InferencePage(QWidget):
             conf=float(self.conf.value()),
             iou=float(self.iou.value()),
             device=self.device.currentText(),
-            label_mapping=self._fixed_label_mapping(),
+            isolate=self.isolate_infer.isChecked(),
+            label_mapping=CLASS_NAMES_CN,
         )
         self.worker.finished.connect(self.on_inference_done)
         self.worker.failed.connect(self.on_inference_failed)
@@ -377,7 +460,7 @@ class InferencePage(QWidget):
 
         self.counts_table.setRowCount(0)
         class_names = []
-        label_mapping = self._fixed_label_mapping()
+        label_mapping = CLASS_NAMES_CN
         if not counts and dets:
             from collections import Counter
             counts = {int(k): v for k, v in Counter(int(d["class_id"]) for d in dets).items()}
@@ -407,7 +490,7 @@ class InferencePage(QWidget):
             out_json = out_dir / f"{image_src.stem}.json"
             try:
                 class_names = []
-                label_mapping = self._fixed_label_mapping()
+                label_mapping = CLASS_NAMES_CN
                 export_xanylabeling_json(
                     image_path=str(image_dst if image_dst.exists() else image_src),
                     image_size=vis_img.size,
@@ -471,30 +554,3 @@ class InferencePage(QWidget):
         if weights.exists():
             self.weights_edit.setText(str(weights))
             set_setting("weights_path", str(weights))
-
-    @staticmethod
-    def _fixed_label_mapping() -> dict[int, str]:
-        # Hard-coded mapping from class_id -> Chinese name (authoritative)
-        return {
-            0: "嗜碱细胞",
-            1: "刺状红细胞",
-            2: "椭圆形红细胞",
-            3: "嗜酸细胞",
-            4: "红细胞前体",
-            5: "低色素症",
-            6: "淋巴细胞",
-            7: "大细胞",
-            8: "小细胞",
-            9: "单核细胞",
-            10: "中性粒细胞",
-            11: "椭圆细胞",
-            12: "血小板",
-            13: "红细胞-猫",
-            14: "红细胞-狗",
-            15: "裂片细胞",
-            16: "球形细胞",
-            17: "口形细胞",
-            18: "靶细胞",
-            19: "泪滴细胞",
-            20: "白细胞",
-        }

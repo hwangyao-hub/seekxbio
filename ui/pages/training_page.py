@@ -24,12 +24,14 @@ from PySide6.QtWidgets import (
 )
 
 from core import build_val_split, get_run_outputs, scan_dataset_from_yaml, train_yolov8_stream
+from core.constants import DEVICE_OPTIONS, MODEL_OPTIONS
 from ui.utils import default_yaml_path, get_setting, set_setting
 
 
 class TrainingWorker(QThread):
     log_line = Signal(str)
     finished = Signal(dict)
+    failed = Signal(str)
 
     def __init__(
         self,
@@ -55,6 +57,8 @@ class TrainingWorker(QThread):
         self.remap_classes = remap_classes
 
     def run(self) -> None:
+        had_error = False
+        exit_message = ""
         for line in train_yolov8_stream(
             data_yaml=self.data_yaml,
             model_name=self.model_name,
@@ -67,7 +71,16 @@ class TrainingWorker(QThread):
             remap_classes=self.remap_classes,
         ):
             self.log_line.emit(line.rstrip("\n"))
+            if line.startswith("[ERROR] Training process exited with code"):
+                had_error = True
+                exit_message = line.strip()
         outputs = get_run_outputs("runs/detect", "cells")
+        if had_error:
+            self.failed.emit(exit_message or "Training failed.")
+            return
+        if not outputs.get("best") and not outputs.get("last"):
+            self.failed.emit("Training finished but no weights were found.")
+            return
         self.finished.emit(outputs)
 
 
@@ -137,27 +150,9 @@ class TrainingPage(QWidget):
         self.browse_yaml_btn = QPushButton("Browse")
         self.browse_yaml_btn.clicked.connect(self.browse_yaml)
         self.model_name = QComboBox()
-        self.model_name.addItems(
-            [
-                "yolov8n.pt",
-                "yolov8s.pt",
-                "yolov8m.pt",
-                "yolov8l.pt",
-                "yolov8x.pt",
-                "yolov5n.pt",
-                "yolov5s.pt",
-                "yolov5m.pt",
-                "yolov5l.pt",
-                "yolov5x.pt",
-                "yolo11n.pt",
-                "yolo11s.pt",
-                "yolo11m.pt",
-                "yolo11l.pt",
-                "yolo11x.pt",
-            ]
-        )
+        self.model_name.addItems(MODEL_OPTIONS)
         self.device = QComboBox()
-        self.device.addItems(["auto", "cpu", "cuda"])
+        self.device.addItems(DEVICE_OPTIONS)
 
         self.model_name.setCurrentText(get_setting("train_model", "yolov8n.pt"))
         self.device.setCurrentText(get_setting("train_device", "auto"))
@@ -280,6 +275,7 @@ class TrainingPage(QWidget):
         )
         self.worker.log_line.connect(self.append_log)
         self.worker.finished.connect(self.on_finished)
+        self.worker.failed.connect(self.on_failed)
         self.worker.start()
 
     def check_dataset(self, autofix: bool = False) -> bool:
@@ -341,6 +337,13 @@ class TrainingPage(QWidget):
     def on_finished(self, outputs: dict) -> None:
         best_name = Path(outputs.get("best", "")).name
         self.output.setText(f"Status: Completed | best: {best_name}")
+        self.start_btn.setEnabled(True)
+        self.set_controls_enabled(True)
+        self.progress.setVisible(False)
+        self.timer.stop()
+
+    def on_failed(self, message: str) -> None:
+        self.output.setText(f"Status: Failed | {message}")
         self.start_btn.setEnabled(True)
         self.set_controls_enabled(True)
         self.progress.setVisible(False)

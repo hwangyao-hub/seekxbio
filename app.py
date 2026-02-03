@@ -32,6 +32,7 @@ from core import (
     get_run_outputs,
     export_xanylabeling_json,
 )
+from core.constants import CLASS_NAMES_CN, DEVICE_OPTIONS, MODEL_OPTIONS
 from core.utils import resolve_device
 
 # ============================================================================
@@ -46,50 +47,7 @@ RUNS_DIR = str(ROOT / "runs" / "detect")
 # Software version - update this when making changes
 VERSION = "1.1.1"
 
-# 21 类细胞中文名称映射
-CLASS_NAMES_CN = {
-    0: "嗜碱细胞",
-    1: "刺状红细胞",
-    2: "椭圆形红细胞",
-    3: "嗜酸细胞",
-    4: "红细胞前体",
-    5: "低色素症",
-    6: "淋巴细胞",
-    7: "大细胞",
-    8: "小细胞",
-    9: "单核细胞",
-    10: "中性粒细胞",
-    11: "椭圆细胞",
-    12: "血小板",
-    13: "红细胞-猫",
-    14: "红细胞-狗",
-    15: "裂片细胞",
-    16: "球形细胞",
-    17: "口形细胞",
-    18: "靶细胞",
-    19: "泪滴细胞",
-    20: "白细胞",
-}
-
-MODEL_OPTIONS = [
-    "yolov8n.pt",
-    "yolov8s.pt",
-    "yolov8m.pt",
-    "yolov8l.pt",
-    "yolov8x.pt",
-    "yolov5n.pt",
-    "yolov5s.pt",
-    "yolov5m.pt",
-    "yolov5l.pt",
-    "yolov5x.pt",
-    "yolo11n.pt",
-    "yolo11s.pt",
-    "yolo11m.pt",
-    "yolo11l.pt",
-    "yolo11x.pt",
-]
-
-DEVICE_OPTIONS = ["auto", "cpu", "cuda", "cuda:0", "cuda:1"]
+# Shared constants live in core.constants to keep UI parity.
 
 # Global state for training logs
 training_logs: list[str] = []
@@ -105,12 +63,16 @@ def _get_cached_image(image_id: str, image_array: np.ndarray) -> Image.Image:
     cache_key = f"{image_id}_{id(image_array)}"
     if cache_key in _image_cache:
         return _image_cache[cache_key]
-    
+
     # Clear cache if too large
     if len(_image_cache) >= _MAX_CACHE_SIZE:
         _image_cache.clear()
-    
-    pil_image = Image.fromarray(image_array) if image_array.shape[2] == 3 else Image.fromarray(image_array).convert("RGB")
+
+    pil_image = (
+        Image.fromarray(image_array)
+        if image_array.shape[2] == 3
+        else Image.fromarray(image_array).convert("RGB")
+    )
     _image_cache[cache_key] = pil_image
     return pil_image
 
@@ -119,21 +81,22 @@ def _get_cached_image(image_id: str, image_array: np.ndarray) -> Image.Image:
 # Helper Functions
 # ============================================================================
 
+
 def find_latest_model(runs_dir: str | Path) -> str | None:
     """Find the latest trained model in runs directory."""
     runs_path = Path(runs_dir)
     if not runs_path.exists():
         return None
-    
+
     best_candidates = []
     for subdir in runs_path.rglob("weights"):
         best_pt = subdir / "best.pt"
         if best_pt.exists():
             best_candidates.append((best_pt.stat().st_mtime, str(best_pt)))
-    
+
     if not best_candidates:
         return None
-    
+
     best_candidates.sort(reverse=True)
     return best_candidates[0][1]
 
@@ -155,7 +118,7 @@ def format_dataset_stats(stats: dict) -> str:
             f"  • {split}: images={s.get('images', 0)}, labels={s.get('labels', 0)}, "
             f"missing_labels={s.get('missing_labels', 0)}"
         )
-    
+
     lines.append("")
     lines.append("📈 Class counts:")
     class_counts = stats.get("class_counts", {})
@@ -165,7 +128,7 @@ def format_dataset_stats(stats: dict) -> str:
             lines.append(f"  • {cn_name} (ID {k}): {v}")
     else:
         lines.append("  • none")
-    
+
     return "\n".join(lines)
 
 
@@ -173,46 +136,54 @@ def get_class_distribution_chart(stats: dict) -> np.ndarray | None:
     """Generate a bar chart for class distribution using matplotlib."""
     try:
         import matplotlib
-        matplotlib.use('Agg')
+
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        
+
         class_counts = stats.get("class_counts", {})
         if not class_counts:
             return None
-        
+
         # Sort by class ID
         items = sorted(class_counts.items(), key=lambda x: int(x[0]))
         ids = [int(k) for k, v in items]
         counts = [v for k, v in items]
         labels = [f"{CLASS_NAMES_CN.get(i, str(i))}\n(ID:{i})" for i in ids]
-        
+
         # Create figure
         fig, ax = plt.subplots(figsize=(14, 6))
-        bars = ax.bar(range(len(ids)), counts, color='#3B82F6', edgecolor='#1D4ED8', linewidth=1.5)
-        
+        bars = ax.bar(
+            range(len(ids)), counts, color="#3B82F6", edgecolor="#1D4ED8", linewidth=1.5
+        )
+
         # Customize
         ax.set_xticks(range(len(ids)))
-        ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=8)
-        ax.set_xlabel('Cell Class', fontsize=12)
-        ax.set_ylabel('Count', fontsize=12)
-        ax.set_title('Dataset Class Distribution', fontsize=14, fontweight='bold')
-        ax.grid(axis='y', alpha=0.3, linestyle='--')
-        
+        ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+        ax.set_xlabel("Cell Class", fontsize=12)
+        ax.set_ylabel("Count", fontsize=12)
+        ax.set_title("Dataset Class Distribution", fontsize=14, fontweight="bold")
+        ax.grid(axis="y", alpha=0.3, linestyle="--")
+
         # Add value labels on bars
         for bar, count in zip(bars, counts):
             height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height,
-                   f'{int(count)}',
-                   ha='center', va='bottom', fontsize=8)
-        
+            ax.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                height,
+                f"{int(count)}",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+
         plt.tight_layout()
-        
+
         # Convert to numpy array
         fig.canvas.draw()
         buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
         buf = buf.reshape(fig.canvas.get_width_height()[::-1] + (3,))
         plt.close(fig)
-        
+
         return buf
     except Exception as e:
         print(f"Chart generation error: {e}")
@@ -223,12 +194,13 @@ def get_class_distribution_chart(stats: dict) -> np.ndarray | None:
 # Dashboard Functions
 # ============================================================================
 
+
 def scan_dataset_handler(dataset_root: str) -> tuple[str, np.ndarray | None]:
     """Handle dataset scanning."""
     try:
         if not dataset_root or not Path(dataset_root).exists():
             return "❌ Error: Dataset root does not exist.", None
-        
+
         stats = scan_dataset(dataset_root)
         text_output = format_dataset_stats(stats)
         chart = get_class_distribution_chart(stats)
@@ -242,7 +214,7 @@ def scan_from_yaml(yaml_path: str) -> tuple[str, np.ndarray | None]:
     try:
         if not yaml_path or not Path(yaml_path).exists():
             return "❌ Error: YAML file does not exist.", None
-        
+
         stats = scan_dataset_from_yaml(yaml_path)
         text_output = format_dataset_stats(stats)
         chart = get_class_distribution_chart(stats)
@@ -256,15 +228,15 @@ def regenerate_val_split(dataset_root: str, ratio: float = 0.1) -> str:
     try:
         if not dataset_root or not Path(dataset_root).exists():
             return "❌ Error: Dataset root does not exist."
-        
+
         stats = build_val_split(dataset_root, ratio=ratio, seed=42)
         if stats["val_images"] == 0:
             return "❌ Error: Cannot regenerate val: no train images found."
-        
+
         return (
             f"✅ Successfully regenerated validation split:\n"
             f"   • Train images: {stats['train_images']}\n"
-            f"   • Val images: {stats['val_images']} ({ratio*100:.0f}%)"
+            f"   • Val images: {stats['val_images']} ({ratio * 100:.0f}%)"
         )
     except Exception as e:
         return f"❌ Error: {str(e)}"
@@ -274,6 +246,7 @@ def regenerate_val_split(dataset_root: str, ratio: float = 0.1) -> str:
 # Training Functions
 # ============================================================================
 
+
 def check_dataset_handler(yaml_path: str) -> str:
     """Check if dataset is valid for training."""
     try:
@@ -281,24 +254,26 @@ def check_dataset_handler(yaml_path: str) -> str:
         split_stats = stats.get("split_stats", {})
         val = split_stats.get("val", {})
         train = split_stats.get("train", {})
-        
+
         messages = [
             f"📊 Dataset check results:",
             f"   • Train images: {train.get('images', 0)}",
             f"   • Val images: {val.get('images', 0)}",
         ]
-        
+
         if train.get("images", 0) == 0:
             messages.append("\n❌ ERROR: No training images found!")
             return "\n".join(messages)
-        
+
         if val.get("images", 0) == 0:
-            messages.append("\n⚠️ WARNING: Validation images missing. Please regenerate val split.")
+            messages.append(
+                "\n⚠️ WARNING: Validation images missing. Please regenerate val split."
+            )
             return "\n".join(messages)
-        
+
         messages.append("\n✅ Dataset check passed!")
         return "\n".join(messages)
-        
+
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
@@ -315,17 +290,17 @@ def train_model_stream(
 ) -> Iterator[str]:
     """Stream training logs."""
     global is_training, training_logs
-    
+
     if not data_yaml or not Path(data_yaml).exists():
         yield "❌ Error: Dataset YAML does not exist."
         return
-    
+
     is_training = True
     training_logs = []
     start_time = time.time()
-    
-    yield "🚀 Starting training...\n" + "="*50 + "\n"
-    
+
+    yield "🚀 Starting training...\n" + "=" * 50 + "\n"
+
     try:
         for line in train_yolov8_stream(
             data_yaml=data_yaml,
@@ -340,21 +315,25 @@ def train_model_stream(
         ):
             # Clean ANSI codes
             import re
+
             clean_line = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line)
             training_logs.append(clean_line)
             elapsed = time.time() - start_time
-            yield f"⏱️ Elapsed: {int(elapsed//60):02d}:{int(elapsed%60):02d}\n" + "\n".join(training_logs[-50:])  # Show last 50 lines
-        
+            yield (
+                f"⏱️ Elapsed: {int(elapsed // 60):02d}:{int(elapsed % 60):02d}\n"
+                + "\n".join(training_logs[-50:])
+            )  # Show last 50 lines
+
         outputs = get_run_outputs("runs/detect", "cells")
         best_path = outputs.get("best", "")
-        
+
         yield (
             f"\n✅ Training completed!\n"
-            f"{'='*50}\n"
+            f"{'=' * 50}\n"
             f"📁 Model saved to: {best_path}\n"
-            f"⏱️ Total time: {int(elapsed//60):02d}:{int(elapsed%60):02d}"
+            f"⏱️ Total time: {int(elapsed // 60):02d}:{int(elapsed % 60):02d}"
         )
-        
+
     except Exception as e:
         yield f"\n❌ Training error: {str(e)}"
     finally:
@@ -372,9 +351,12 @@ def stop_training() -> str:
 # Inference Functions
 # ============================================================================
 
-def preprocess_image(image: np.ndarray, max_size: int = 1920, fast_mode: bool = False) -> Image.Image:
+
+def preprocess_image(
+    image: np.ndarray, max_size: int = 1920, fast_mode: bool = False
+) -> Image.Image:
     """Preprocess image: convert and optionally resize for faster processing.
-    
+
     Args:
         image: Input numpy array
         max_size: Maximum dimension (0 = no limit)
@@ -382,7 +364,7 @@ def preprocess_image(image: np.ndarray, max_size: int = 1920, fast_mode: bool = 
     """
     if image is None:
         return None
-    
+
     # Convert numpy array to PIL Image
     if isinstance(image, np.ndarray):
         if image.shape[2] == 3:
@@ -391,7 +373,7 @@ def preprocess_image(image: np.ndarray, max_size: int = 1920, fast_mode: bool = 
             pil_image = Image.fromarray(image).convert("RGB")
     else:
         pil_image = image
-    
+
     # Resize if image is too large (speeds up both saving and inference)
     if max_size > 0:
         w, h = pil_image.size
@@ -399,9 +381,11 @@ def preprocess_image(image: np.ndarray, max_size: int = 1920, fast_mode: bool = 
             ratio = max_size / max(w, h)
             new_size = (int(w * ratio), int(h * ratio))
             # Use faster resampling in fast mode
-            resample = Image.Resampling.BILINEAR if fast_mode else Image.Resampling.LANCZOS
+            resample = (
+                Image.Resampling.BILINEAR if fast_mode else Image.Resampling.LANCZOS
+            )
             pil_image = pil_image.resize(new_size, resample)
-    
+
     return pil_image
 
 
@@ -409,12 +393,12 @@ def get_image_info(image: np.ndarray) -> str:
     """Get image size info for display."""
     if image is None:
         return "未选择图片"
-    
+
     if isinstance(image, np.ndarray):
         h, w = image.shape[:2]
         mp = (w * h) / 1000000  # Megapixels
         size_info = f"{w}×{h} ({mp:.1f}MP)"
-        
+
         # Estimate processing speed
         if max(w, h) > 4000:
             return f"📷 {size_info} - 🔴 大尺寸图片，建议启用压缩以加快处理"
@@ -422,7 +406,7 @@ def get_image_info(image: np.ndarray) -> str:
             return f"📷 {size_info} - 🟡 中等尺寸，建议适度压缩"
         else:
             return f"📷 {size_info} - 🟢 尺寸适中，可直接处理"
-    
+
     return "未知尺寸"
 
 
@@ -440,26 +424,28 @@ def run_inference(
     try:
         if image is None:
             return None, "❌ Error: No image provided."
-        
+
         if not weights_path or not Path(weights_path).exists():
             return None, f"❌ Error: Weights not found: {weights_path}"
-        
+
         # Determine quality settings based on max_size
         fast_mode = preprocess_max_size <= 1280 and preprocess_max_size > 0
         jpeg_quality = 85 if fast_mode else 95
-        
+
         # Preprocess image (resize if too large)
-        pil_image = preprocess_image(image, max_size=preprocess_max_size, fast_mode=fast_mode)
+        pil_image = preprocess_image(
+            image, max_size=preprocess_max_size, fast_mode=fast_mode
+        )
         if pil_image is None:
             return None, "❌ Error: Failed to process image."
-        
+
         # Use JPEG for temporary file (faster than PNG)
         temp_path = ROOT / "temp_infer_image.jpg"
         pil_image.save(temp_path, quality=jpeg_quality, optimize=True)
-        
+
         # Determine label mapping
         label_mapping = CLASS_NAMES_CN if use_chinese_labels else None
-        
+
         # Run inference
         vis_img, counts, total, dets = infer_and_count(
             weights=weights_path,
@@ -471,14 +457,14 @@ def run_inference(
             return_dets=True,
             label_mapping=label_mapping,
         )
-        
+
         # Clean up temp file
         try:
             if temp_path.exists():
                 temp_path.unlink()
         except:
             pass
-        
+
         # Optimize output image for web display
         # Limit output size to reduce transfer time
         out_w, out_h = vis_img.size
@@ -487,17 +473,18 @@ def run_inference(
             ratio = max_display_size / max(out_w, out_h)
             new_size = (int(out_w * ratio), int(out_h * ratio))
             vis_img = vis_img.resize(new_size, Image.Resampling.LANCZOS)
-        
+
         # Format results
         result_lines = [f"🎯 Total cells detected: {total}", "", "📊 Per-class counts:"]
         for cls_id, count in sorted(counts.items()):
             name = CLASS_NAMES_CN.get(cls_id, f"Class {cls_id}")
             result_lines.append(f"   • {name} (ID {cls_id}): {count}")
-        
+
         return vis_img, "\n".join(result_lines)
-        
+
     except Exception as e:
         import traceback
+
         return None, f"❌ Error: {str(e)}\n{traceback.format_exc()}"
 
 
@@ -526,7 +513,7 @@ def export_to_xanylabeling(
     preprocess_max_size: int = 1920,
 ) -> str:
     """Export inference results to X-AnyLabeling format with optimization.
-    
+
     Args:
         image: Input image array
         custom_filename: Custom filename for export (without extension)
@@ -535,36 +522,41 @@ def export_to_xanylabeling(
     try:
         if image is None:
             return "❌ Error: No image provided."
-        
+
         if not weights_path or not Path(weights_path).exists():
             return f"❌ Error: Weights not found: {weights_path}"
-        
+
         # Determine quality settings
         fast_mode = preprocess_max_size <= 1280 and preprocess_max_size > 0
         jpeg_quality = 85 if fast_mode else 95
-        
+
         # Preprocess image
-        pil_image = preprocess_image(image, max_size=preprocess_max_size, fast_mode=fast_mode)
+        pil_image = preprocess_image(
+            image, max_size=preprocess_max_size, fast_mode=fast_mode
+        )
         if pil_image is None:
             return "❌ Error: Failed to process image."
-        
+
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Use custom filename or timestamp
         if custom_filename and custom_filename.strip():
             # Sanitize filename
-            base_name = "".join(c for c in custom_filename.strip() if c.isalnum() or c in "-_").strip()
+            base_name = "".join(
+                c for c in custom_filename.strip() if c.isalnum() or c in "-_"
+            ).strip()
             if not base_name:
                 base_name = "export"
         else:
             # Use timestamp
             from datetime import datetime
+
             base_name = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
+
         image_path = out_dir / f"{base_name}.jpg"
         pil_image.save(image_path, quality=jpeg_quality, optimize=True)
-        
+
         # Run inference with detections
         vis_img, counts, total, dets = infer_and_count(
             weights=weights_path,
@@ -576,7 +568,7 @@ def export_to_xanylabeling(
             return_dets=True,
             label_mapping=CLASS_NAMES_CN,
         )
-        
+
         # Export JSON with same base name
         output_json = out_dir / f"{base_name}.json"
         export_xanylabeling_json(
@@ -586,9 +578,9 @@ def export_to_xanylabeling(
             output_json=str(output_json),
             label_mapping=CLASS_NAMES_CN,
         )
-        
+
         return f"✅ Exported to:\n   • Image: {image_path.name}\n   • JSON: {output_json.name}"
-        
+
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
@@ -597,13 +589,13 @@ def export_to_xanylabeling(
 # Gradio Interface
 # ============================================================================
 
+
 def create_interface() -> gr.Blocks:
     """Create the Gradio interface."""
-    
+
     with gr.Blocks(
         title="Microscopy AI - Cell Detection",
     ) as demo:
-        
         # Apply custom CSS
         gr.Markdown(
             """
@@ -613,20 +605,20 @@ def create_interface() -> gr.Blocks:
             </style>
             """
         )
-        
+
         gr.Markdown(
             """
             # 🔬 Microscopy AI - 细胞检测系统
             基于 YOLOv8 的显微镜血细胞检测、分类与计数
             """
         )
-        
+
         # ========================================================================
         # Tab 1: Dashboard
         # ========================================================================
         with gr.Tab("📊 数据仪表板"):
             gr.Markdown("### 数据集概览与统计")
-            
+
             with gr.Row():
                 with gr.Column(scale=1):
                     dataset_root_input = gr.Textbox(
@@ -639,13 +631,17 @@ def create_interface() -> gr.Blocks:
                         value=DEFAULT_YAML_PATH,
                         placeholder="输入 YAML 文件路径",
                     )
-                    
+
                     with gr.Row():
                         scan_btn = gr.Button("🔍 扫描数据集", variant="primary")
-                        scan_yaml_btn = gr.Button("🔍 从 YAML 扫描", variant="secondary")
-                    
+                        scan_yaml_btn = gr.Button(
+                            "🔍 从 YAML 扫描", variant="secondary"
+                        )
+
                     with gr.Row():
-                        regen_val_btn = gr.Button("🔄 重新生成验证集", variant="secondary")
+                        regen_val_btn = gr.Button(
+                            "🔄 重新生成验证集", variant="secondary"
+                        )
                         val_ratio = gr.Slider(
                             label="验证集比例",
                             minimum=0.05,
@@ -653,7 +649,7 @@ def create_interface() -> gr.Blocks:
                             value=0.1,
                             step=0.05,
                         )
-                
+
                 with gr.Column(scale=2):
                     dataset_stats_output = gr.Textbox(
                         label="数据集统计",
@@ -662,16 +658,16 @@ def create_interface() -> gr.Blocks:
                         interactive=False,
                         elem_classes=["output-text"],
                     )
-            
+
             with gr.Row():
                 class_dist_plot = gr.Image(
                     label="类别分布图",
                     type="numpy",
                     interactive=False,
                 )
-            
+
             regen_val_output = gr.Textbox(label="验证集生成结果", interactive=False)
-            
+
             # Event handlers
             scan_btn.click(
                 fn=scan_dataset_handler,
@@ -688,13 +684,13 @@ def create_interface() -> gr.Blocks:
                 inputs=[dataset_root_input, val_ratio],
                 outputs=[regen_val_output],
             )
-        
+
         # ========================================================================
         # Tab 2: Training
         # ========================================================================
         with gr.Tab("🚀 模型训练"):
             gr.Markdown("### 训练 YOLOv8 模型")
-            
+
             with gr.Row():
                 with gr.Column(scale=1):
                     gr.Markdown("#### 数据集与模型配置")
@@ -712,10 +708,12 @@ def create_interface() -> gr.Blocks:
                         choices=DEVICE_OPTIONS,
                         value="auto",
                     )
-                    
+
                     check_dataset_btn = gr.Button("✅ 检查数据集", variant="secondary")
-                    check_output = gr.Textbox(label="检查结果", lines=5, interactive=False)
-                
+                    check_output = gr.Textbox(
+                        label="检查结果", lines=5, interactive=False
+                    )
+
                 with gr.Column(scale=1):
                     gr.Markdown("#### 训练参数")
                     epochs_input = gr.Slider(
@@ -739,7 +737,7 @@ def create_interface() -> gr.Blocks:
                         value=640,
                         step=32,
                     )
-                    
+
                     with gr.Row():
                         limit_train_input = gr.Number(
                             label="限制训练图片数 (0=全部)",
@@ -751,11 +749,11 @@ def create_interface() -> gr.Blocks:
                             value=0,
                             minimum=0,
                         )
-            
+
             with gr.Row():
                 start_train_btn = gr.Button("🚀 开始训练", variant="primary", size="lg")
                 stop_train_btn = gr.Button("⏹️ 停止训练", variant="stop", size="lg")
-            
+
             train_logs_output = gr.Textbox(
                 label="训练日志",
                 lines=30,
@@ -764,7 +762,7 @@ def create_interface() -> gr.Blocks:
                 elem_classes=["output-text"],
                 autoscroll=True,
             )
-            
+
             # Event handlers
             check_dataset_btn.click(
                 fn=check_dataset_handler,
@@ -789,13 +787,13 @@ def create_interface() -> gr.Blocks:
                 fn=stop_training,
                 outputs=[train_logs_output],
             )
-        
+
         # ========================================================================
         # Tab 3: Inference
         # ========================================================================
         with gr.Tab("🔍 推理检测"):
             gr.Markdown("### 细胞检测与计数")
-            
+
             with gr.Row():
                 with gr.Column(scale=1):
                     gr.Markdown("#### 输入与参数")
@@ -806,7 +804,7 @@ def create_interface() -> gr.Blocks:
                         height=400,  # 限制预览高度
                         streaming=False,  # Disable streaming for faster upload
                     )
-                    
+
                     # Custom filename for export (defaults to timestamp)
                     export_filename = gr.Textbox(
                         label="导出文件名 (不含扩展名)",
@@ -814,20 +812,20 @@ def create_interface() -> gr.Blocks:
                         placeholder="留空则使用当前时间戳",
                         info="导出时会自动添加 .jpg 和 .json 扩展名",
                     )
-                    
+
                     image_info = gr.Textbox(
                         label="图片信息",
                         value="未选择图片",
                         interactive=False,
                     )
-                    
+
                     # Update image info when image changes
                     input_image.change(
                         fn=get_image_info,
                         inputs=[input_image],
                         outputs=[image_info],
                     )
-                    
+
                     with gr.Row():
                         preprocess_size = gr.Slider(
                             label="最大边长限制 (0=不限制, 推荐1920)",
@@ -837,7 +835,7 @@ def create_interface() -> gr.Blocks:
                             value=1920,
                             step=64,
                         )
-                    
+
                     speed_mode = gr.Radio(
                         label="处理模式",
                         choices=[
@@ -847,24 +845,24 @@ def create_interface() -> gr.Blocks:
                         ],
                         value=1920,
                     )
-                    
+
                     # Link speed mode to preprocess_size
                     def update_preprocess_size(mode_value):
                         return gr.update(value=mode_value)
-                    
+
                     speed_mode.change(
                         fn=update_preprocess_size,
                         inputs=[speed_mode],
                         outputs=[preprocess_size],
                     )
-                    
+
                     weights_input = gr.Textbox(
                         label="模型权重路径",
                         value=auto_find_weights(),
                         placeholder="选择 .pt 权重文件",
                     )
                     auto_find_btn = gr.Button("🔍 自动查找最新模型", size="sm")
-                    
+
                     with gr.Row():
                         infer_imgsz = gr.Slider(
                             label="图像尺寸",
@@ -880,7 +878,7 @@ def create_interface() -> gr.Blocks:
                             value=0.25,
                             step=0.01,
                         )
-                    
+
                     with gr.Row():
                         infer_iou = gr.Slider(
                             label="IoU 阈值",
@@ -894,16 +892,18 @@ def create_interface() -> gr.Blocks:
                             choices=DEVICE_OPTIONS,
                             value="auto",
                         )
-                    
+
                     use_cn_labels = gr.Checkbox(
                         label="使用中文类别名称",
                         value=True,
                     )
-                    
+
                     gr.Markdown("💡 **提示**: 如果图片加载慢，请调小『最大边长限制』")
-                    
-                    run_infer_btn = gr.Button("🔍 运行推理", variant="primary", size="lg")
-                
+
+                    run_infer_btn = gr.Button(
+                        "🔍 运行推理", variant="primary", size="lg"
+                    )
+
                 with gr.Column(scale=2):
                     gr.Markdown("#### 检测结果")
                     output_image = gr.Image(
@@ -917,7 +917,7 @@ def create_interface() -> gr.Blocks:
                         interactive=False,
                         elem_classes=["output-text"],
                     )
-            
+
             with gr.Row():
                 with gr.Column():
                     gr.Markdown("#### 导出到 X-AnyLabeling")
@@ -927,7 +927,7 @@ def create_interface() -> gr.Blocks:
                     )
                     export_btn = gr.Button("📤 导出标注文件", variant="secondary")
                     export_output = gr.Textbox(label="导出结果", interactive=False)
-            
+
             # Event handlers
             auto_find_btn.click(
                 fn=lambda: auto_find_weights(),
@@ -950,7 +950,7 @@ def create_interface() -> gr.Blocks:
             # Capture filename on upload (using a workaround with upload event)
             # Note: Gradio doesn't directly expose filename, so we use a default
             # The filename will be shown in the export output for verification
-            
+
             export_btn.click(
                 fn=export_to_xanylabeling,
                 inputs=[
@@ -966,13 +966,13 @@ def create_interface() -> gr.Blocks:
                 ],
                 outputs=[export_output],
             )
-        
+
         # ========================================================================
         # Tab 4: Settings
         # ========================================================================
         with gr.Tab("⚙️ 设置"):
             gr.Markdown("### 系统设置")
-            
+
             with gr.Row():
                 with gr.Column():
                     gr.Markdown("#### 系统信息")
@@ -981,15 +981,17 @@ def create_interface() -> gr.Blocks:
                         value=f"PyTorch: {resolve_device('auto')}",
                         interactive=False,
                     )
-                    
+
                     gr.Markdown("#### 类别名称映射")
                     class_mapping_text = gr.Textbox(
                         label="类别映射 (ID: 中文名称)",
-                        value="\n".join([f"{k}: {v}" for k, v in CLASS_NAMES_CN.items()]),
+                        value="\n".join(
+                            [f"{k}: {v}" for k, v in CLASS_NAMES_CN.items()]
+                        ),
                         lines=25,
                         interactive=False,
                     )
-        
+
         gr.Markdown(
             f"""
             ---
@@ -998,7 +1000,7 @@ def create_interface() -> gr.Blocks:
             </center>
             """
         )
-    
+
     return demo
 
 
@@ -1008,20 +1010,15 @@ def create_interface() -> gr.Blocks:
 
 if __name__ == "__main__":
     demo = create_interface()
-    
+
     # Enable queue for better concurrency handling
-    demo.queue(
-        default_concurrency_limit=3,  # Allow up to 3 concurrent operations
-        max_size=20,                   # Queue up to 20 requests
-    )
-    
+    demo.queue(max_size=20)
+
+    server_name = os.getenv("GRADIO_SERVER_NAME", "0.0.0.0")
+    server_port = int(os.getenv("GRADIO_SERVER_PORT", "7860"))
     demo.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
+        server_name=server_name,
+        server_port=server_port,
         share=False,
         show_error=True,
-        theme=gr.themes.Soft(
-            primary_hue="blue",
-            secondary_hue="slate",
-        ),
     )

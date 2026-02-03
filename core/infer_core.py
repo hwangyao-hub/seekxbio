@@ -60,7 +60,14 @@ def render_detections(
 ) -> Image.Image:
     draw = ImageDraw.Draw(image)
     font = None
-    for font_name in ("msyh.ttc", "msyh.ttf", "simsun.ttc", "simhei.ttf", "arial.ttf"):
+    for font_name in (
+        "msyh.ttc",
+        "msyh.ttf",
+        "simsun.ttc",
+        "simhei.ttf",
+        "arial.ttf",
+        "DejaVuSans.ttf",
+    ):
         try:
             font = ImageFont.truetype(font_name, font_size)
             break
