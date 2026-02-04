@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 
@@ -29,8 +28,9 @@ from PySide6.QtWidgets import (
 )
 from PIL.ImageQt import ImageQt
 
-from core import export_xanylabeling_json, infer_and_count
+from core import infer_and_count
 from core.constants import CLASS_NAMES_CN, DEVICE_OPTIONS
+from ui.annotation_tool import AnnotationDialog
 from ui.utils import default_weights_path, find_latest_model, get_setting, project_root, set_setting
 
 
@@ -214,10 +214,6 @@ class InferencePage(QWidget):
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
 
-        title = QLabel("Inference")
-        title.setStyleSheet("font-size: 18px; font-weight: 600; color: #e5e7eb;")
-        layout.addWidget(title)
-
         self.setStyleSheet(
             """
             QWidget { background: #0a0e1a; color: #e5e7eb; }
@@ -327,9 +323,18 @@ class InferencePage(QWidget):
         self.isolate_infer = QCheckBox("Isolate inference (safer)")
         self.isolate_infer.setChecked(get_setting("infer_isolate", "1") == "1")
 
+        self.counts_table = QTableWidget(0, 2)
+        self.counts_table.setHorizontalHeaderLabels(["Class", "Count"])
+        self.counts_table.horizontalHeader().setStretchLastSection(True)
+        self.total_label = QLabel("Total cells: 0")
+        self.status_label = QLabel("Status: Idle")
+
         control_layout.addLayout(form)
         control_layout.addWidget(self.isolate_infer)
         control_layout.addWidget(self.run_btn)
+        control_layout.addWidget(self.counts_table)
+        control_layout.addWidget(self.total_label)
+        control_layout.addWidget(self.status_label)
 
         # Right panel (results)
         result_panel = QGroupBox("Results")
@@ -338,6 +343,10 @@ class InferencePage(QWidget):
         self.image_view = ZoomableImageView()
         self.image_view.setMinimumHeight(420)
 
+        self.annotate_btn = QPushButton("Open Annotator")
+        self.annotate_btn.setEnabled(False)
+        self.annotate_btn.clicked.connect(self.open_annotator)
+
         zoom_row = QHBoxLayout()
         self.zoom_reset_btn = QPushButton("Reset Zoom")
         self.zoom_100_btn = QPushButton("100%")
@@ -345,45 +354,22 @@ class InferencePage(QWidget):
         self.zoom_reset_btn.clicked.connect(self.image_view.reset_zoom)
         self.zoom_100_btn.clicked.connect(self.image_view.zoom_100)
         self.zoom_fit_btn.clicked.connect(self.image_view.fit_view)
+        zoom_row.addWidget(self.annotate_btn)
         zoom_row.addWidget(self.zoom_reset_btn)
         zoom_row.addWidget(self.zoom_100_btn)
         zoom_row.addWidget(self.zoom_fit_btn)
         zoom_row.addStretch()
 
-        self.counts_table = QTableWidget(0, 2)
-        self.counts_table.setHorizontalHeaderLabels(["Class", "Count"])
-        self.counts_table.horizontalHeader().setStretchLastSection(True)
-        self.total_label = QLabel("Total cells: 0")
-        self.status_label = QLabel("Status: Idle")
-
         result_layout.addWidget(self.image_view, 1)
-        result_layout.addWidget(self.counts_table)
-        result_layout.addWidget(self.total_label)
-        result_layout.addWidget(self.status_label)
+        result_layout.addLayout(zoom_row)
 
         main.addWidget(control_panel, 1)
-        main.addWidget(result_panel, 2)
+        main.addWidget(result_panel, 3)
         layout.addLayout(main, 1)
 
         self.worker: InferenceWorker | None = None
-        self.last_xanylabel_json: Path | None = None
-
-        self.save_anylabel = QCheckBox("Save X-AnyLabeling JSON")
-        self.save_anylabel.setChecked(get_setting("save_xanylabel", "1") == "1")
-        self.output_dir = QLineEdit(get_setting("xanylabel_dir", "outputs/xanylabeling"))
-        self.output_browse = QPushButton("Browse")
-        self.output_browse.clicked.connect(self.browse_output_dir)
-        self.open_xanylabel_btn = QPushButton("Open X-AnyLabeling")
-        self.open_xanylabel_btn.clicked.connect(self.open_xanylabeling)
-        output_row = QHBoxLayout()
-        output_row.addWidget(QLabel("Output dir:"))
-        output_row.addWidget(self.output_dir, 1)
-        output_row.addWidget(self.output_browse)
-
-        control_layout.addLayout(zoom_row)
-        control_layout.addWidget(self.save_anylabel)
-        control_layout.addLayout(output_row)
-        control_layout.addWidget(self.open_xanylabel_btn)
+        self.last_image_path: str | None = None
+        self.last_detections: list[dict] = []
 
     def browse_image(self) -> None:
         start_dir = get_setting("infer_browse_dir", "")
@@ -406,15 +392,6 @@ class InferencePage(QWidget):
             self.weights_edit.setText(file_path)
             set_setting("weights_path", file_path)
 
-    def browse_output_dir(self) -> None:
-        start_dir = self.output_dir.text().strip()
-        if not start_dir:
-            start_dir = str(project_root())
-        folder = QFileDialog.getExistingDirectory(self, "Select Output Folder", start_dir)
-        if folder:
-            self.output_dir.setText(folder)
-            set_setting("xanylabel_dir", folder)
-
     def auto_find_latest(self) -> None:
         latest = find_latest_model(project_root() / "runs" / "detect")
         if latest is not None:
@@ -435,8 +412,6 @@ class InferencePage(QWidget):
         self.model_changed.emit(weights)
         set_setting("weights_path", weights)
         set_setting("infer_image", image_path)
-        set_setting("save_xanylabel", "1" if self.save_anylabel.isChecked() else "0")
-        set_setting("xanylabel_dir", self.output_dir.text().strip())
         set_setting("infer_isolate", "1" if self.isolate_infer.isChecked() else "0")
 
         self.run_btn.setEnabled(False)
@@ -480,32 +455,9 @@ class InferencePage(QWidget):
         self.total_label.setText(f"Total cells: {total}")
         self.status_label.setText("Status: Completed")
 
-        if self.save_anylabel.isChecked():
-            out_dir = self._resolve_output_dir()
-            out_dir.mkdir(parents=True, exist_ok=True)
-            image_src = Path(self.image_edit.text().strip())
-            image_dst = out_dir / image_src.name
-            try:
-                if image_src.exists():
-                    shutil.copy2(image_src, image_dst)
-            except Exception as exc:
-                self.status_label.setText(f"Status: image copy failed ({exc})")
-            out_json = out_dir / f"{image_src.stem}.json"
-            try:
-                class_names = []
-                label_mapping = CLASS_NAMES_CN
-                export_xanylabeling_json(
-                    image_path=str(image_dst if image_dst.exists() else image_src),
-                    image_size=vis_img.size,
-                    detections=dets,
-                    output_json=str(out_json),
-                    class_names=class_names if class_names else None,
-                    label_mapping=label_mapping if label_mapping else None,
-                )
-                self.last_xanylabel_json = out_json
-            except Exception as exc:
-                self.status_label.setText(f"Status: JSON export failed ({exc})")
-
+        self.last_image_path = self.image_edit.text().strip()
+        self.last_detections = dets
+        self.annotate_btn.setEnabled(bool(self.last_image_path))
         self.run_btn.setEnabled(True)
 
     def on_inference_failed(self, message: str) -> None:
@@ -513,40 +465,13 @@ class InferencePage(QWidget):
         self.status_label.setText("Status: Failed")
         self.run_btn.setEnabled(True)
 
-    def open_xanylabeling(self) -> None:
-        image_path = self.image_edit.text().strip()
-        if not image_path:
+    def open_annotator(self) -> None:
+        if not getattr(self, "last_image_path", ""):
             self.status_label.setText("Status: Missing image path")
             return
-        xany_root = project_root() / "third_party" / "X-AnyLabeling"
-        app_py = xany_root / "anylabeling" / "app.py"
-        if not app_py.exists():
-            self.status_label.setText("Status: X-AnyLabeling not found")
-            return
-        output_dir = str(self._resolve_output_dir().resolve())
-        labels_path = ""
-        output_json = None
-        if self.last_xanylabel_json and self.last_xanylabel_json.exists():
-            output_json = str(self.last_xanylabel_json.resolve())
-        args = [
-            "--filename",
-            image_path,
-            "--output",
-            output_json if output_json else output_dir,
-            "--labels",
-            labels_path,
-            "--work-dir",
-            str(Path(output_dir).resolve()),
-        ]
-        if getattr(sys, "frozen", False):
-            cmd = [sys.executable, "--xanylabeling"] + args
-        else:
-            cmd = [sys.executable, str(app_py)] + args
-        try:
-            subprocess.Popen(cmd, cwd=str(xany_root))
-            self.status_label.setText("Status: X-AnyLabeling launched")
-        except Exception as exc:
-            self.status_label.setText(f"Status: launch failed ({exc})")
+        dets = getattr(self, "last_detections", [])
+        dialog = AnnotationDialog(self.last_image_path, dets, self)
+        dialog.exec()
 
     def set_dataset_root(self, dataset_root: str) -> None:
         # Align weights path with dashboard dataset root's parent (project root)
@@ -556,10 +481,3 @@ class InferencePage(QWidget):
         if weights.exists():
             self.weights_edit.setText(str(weights))
             set_setting("weights_path", str(weights))
-
-    def _resolve_output_dir(self) -> Path:
-        raw = self.output_dir.text().strip() or "outputs/xanylabeling"
-        out_dir = Path(raw)
-        if not out_dir.is_absolute():
-            out_dir = (project_root() / out_dir).resolve()
-        return out_dir

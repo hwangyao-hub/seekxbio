@@ -42,7 +42,6 @@ class TrainingWorker(QThread):
         imgsz: int,
         device: str,
         limit_train: int,
-        limit_val: int,
         remap_classes: bool,
     ):
         super().__init__()
@@ -53,7 +52,6 @@ class TrainingWorker(QThread):
         self.imgsz = imgsz
         self.device = device
         self.limit_train = limit_train
-        self.limit_val = limit_val
         self.remap_classes = remap_classes
 
     def run(self) -> None:
@@ -67,7 +65,7 @@ class TrainingWorker(QThread):
             batch=self.batch,
             device=self.device,
             limit_train_images=self.limit_train,
-            limit_val_images=self.limit_val,
+            limit_val_images=0,
             remap_classes=self.remap_classes,
         ):
             self.log_line.emit(line.rstrip("\n"))
@@ -90,10 +88,6 @@ class TrainingPage(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
-
-        title = QLabel("Training")
-        title.setStyleSheet("font-size: 18px; font-weight: 600; color: #e5e7eb;")
-        layout.addWidget(title)
 
         self.setStyleSheet(
             """
@@ -145,7 +139,7 @@ class TrainingPage(QWidget):
 
         # ===== Dataset & Model =====
         dataset_group = QGroupBox("Dataset & Model")
-        dataset_layout = QFormLayout(dataset_group)
+        dataset_layout = QGridLayout(dataset_group)
 
         default_yaml = get_setting("dataset_yaml", str(default_yaml_path()))
         self.data_yaml = QLineEdit(default_yaml)
@@ -163,9 +157,12 @@ class TrainingPage(QWidget):
         yaml_row = QHBoxLayout()
         yaml_row.addWidget(self.data_yaml, 1)
         yaml_row.addWidget(self.browse_yaml_btn)
-        dataset_layout.addRow("Dataset YAML:", yaml_row)
-        dataset_layout.addRow("Model:", self.model_name)
-        dataset_layout.addRow("Device:", self.device)
+        dataset_layout.addWidget(QLabel("Dataset YAML:"), 0, 0)
+        dataset_layout.addLayout(yaml_row, 0, 1, 1, 3)
+        dataset_layout.addWidget(QLabel("Model:"), 1, 0)
+        dataset_layout.addWidget(self.model_name, 1, 1)
+        dataset_layout.addWidget(QLabel("Device:"), 1, 2)
+        dataset_layout.addWidget(self.device, 1, 3)
 
         # ===== Training Parameters =====
         params_group = QGroupBox("Training Parameters")
@@ -183,9 +180,6 @@ class TrainingPage(QWidget):
         self.limit_train = QSpinBox()
         self.limit_train.setRange(0, 1000000)
         self.limit_train.setValue(int(get_setting("limit_train", "0")))
-        self.limit_val = QSpinBox()
-        self.limit_val.setRange(0, 1000000)
-        self.limit_val.setValue(int(get_setting("limit_val", "0")))
 
         params_layout.addWidget(QLabel("Epochs"), 0, 0)
         params_layout.addWidget(self.epochs, 0, 1)
@@ -195,8 +189,6 @@ class TrainingPage(QWidget):
         params_layout.addWidget(self.imgsz, 1, 1)
         params_layout.addWidget(QLabel("Limit train images"), 1, 2)
         params_layout.addWidget(self.limit_train, 1, 3)
-        params_layout.addWidget(QLabel("Limit val images"), 2, 0)
-        params_layout.addWidget(self.limit_val, 2, 1)
 
         # ===== Actions & Status =====
         actions_group = QGroupBox("Actions & Status")
@@ -263,7 +255,6 @@ class TrainingPage(QWidget):
         set_setting("train_model", self.model_name.currentText())
         set_setting("train_device", self.device.currentText())
         set_setting("limit_train", str(self.limit_train.value()))
-        set_setting("limit_val", str(self.limit_val.value()))
 
         self.worker = TrainingWorker(
             data_yaml=self.data_yaml.text().strip(),
@@ -273,7 +264,6 @@ class TrainingPage(QWidget):
             imgsz=int(self.imgsz.value()),
             device=self.device.currentText(),
             limit_train=int(self.limit_train.value()),
-            limit_val=int(self.limit_val.value()),
             remap_classes=False,
         )
         self.worker.log_line.connect(self.append_log)
@@ -368,7 +358,6 @@ class TrainingPage(QWidget):
         self.batch.setEnabled(enabled)
         self.imgsz.setEnabled(enabled)
         self.limit_train.setEnabled(enabled)
-        self.limit_val.setEnabled(enabled)
         self.check_btn.setEnabled(enabled)
         self.regen_val_btn.setEnabled(enabled)
 

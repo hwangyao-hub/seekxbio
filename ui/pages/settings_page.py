@@ -26,10 +26,6 @@ class SettingsPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
 
-        title = QLabel("系统设置")
-        title.setStyleSheet("font-size: 18px; font-weight: 600; color: #e5e7eb;")
-        layout.addWidget(title)
-
         self.setStyleSheet(
             """
             QWidget { background: #0a0e1a; color: #e5e7eb; }

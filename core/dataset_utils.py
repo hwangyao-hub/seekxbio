@@ -40,6 +40,21 @@ def _read_label_file(path: Path) -> list[int]:
     return cls_ids
 
 
+def image_to_label_path(image_path: str) -> str:
+    """
+    Map an image path to its YOLO label path.
+    If the path contains an 'images' folder, replace it with 'labels'.
+    Otherwise, place the label next to the image with .txt extension.
+    """
+    p = Path(image_path)
+    parts = list(p.parts)
+    if "images" in parts:
+        idx = parts.index("images")
+        parts[idx] = "labels"
+        return str(Path(*parts).with_suffix(".txt"))
+    return str(p.with_suffix(".txt"))
+
+
 def _detect_layout(root: Path) -> tuple[str, list[str]]:
     # Layout A: images/ & labels/ at root, optionally with split subfolders.
     if (root / "images").exists() and (root / "labels").exists():

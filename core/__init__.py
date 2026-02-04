@@ -4,6 +4,7 @@ from .dataset_utils import (
     scan_dataset_from_yaml,
     format_dataset_report,
     save_dataset_report,
+    image_to_label_path,
 )
 from .infer_core import (
     export_xanylabeling_json,
@@ -33,6 +34,7 @@ __all__ = [
     "scan_dataset_from_yaml",
     "format_dataset_report",
     "save_dataset_report",
+    "image_to_label_path",
     "set_reproducibility",
     "get_run_outputs",
     "train_yolov8",
