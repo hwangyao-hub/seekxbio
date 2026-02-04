@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
+from datetime import datetime
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
 
@@ -183,3 +184,56 @@ def build_val_split(dataset_root: str, ratio: float = 0.1, seed: int = 42) -> di
         (val_lbl / lbl.name).write_bytes(lbl.read_bytes())
 
     return {"train_images": len(pairs), "val_images": len(val_pairs)}
+
+
+def format_dataset_report(
+    stats: dict[str, object],
+    class_name_map: dict[int, str] | None = None,
+) -> str:
+    lines = [
+        "Dataset Report",
+        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        f"Dataset root: {stats.get('dataset_root', '')}",
+        f"Layout: {stats.get('layout', 'unknown')}",
+        f"Total images: {stats.get('total_images', 0)}",
+        f"Total labels: {stats.get('total_labels', 0)}",
+        f"Missing labels: {stats.get('missing_labels', 0)}",
+        f"Missing images: {stats.get('missing_images', 0)}",
+        "",
+        "Split stats:",
+    ]
+    for split, s in stats.get("split_stats", {}).items():
+        lines.append(
+            f"- {split}: images={s.get('images', 0)}, labels={s.get('labels', 0)}, "
+            f"missing_labels={s.get('missing_labels', 0)}, missing_images={s.get('missing_images', 0)}"
+        )
+    lines.append("")
+    lines.append("Class counts:")
+    class_counts = stats.get("class_counts", {})
+    if class_counts:
+        items = sorted(class_counts.items(), key=lambda kv: int(kv[0]))
+        for k, v in items:
+            class_id = int(k)
+            if class_name_map and class_id in class_name_map:
+                label = f"{class_name_map[class_id]} (ID {class_id})"
+            else:
+                label = f"class {class_id}"
+            lines.append(f"- {label}: {v}")
+    else:
+        lines.append("- none")
+    return "\n".join(lines)
+
+
+def save_dataset_report(
+    stats: dict[str, object],
+    output_dir: str,
+    class_name_map: dict[int, str] | None = None,
+) -> str:
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_path = out_dir / f"dataset_report_{ts}.txt"
+    report = format_dataset_report(stats, class_name_map=class_name_map)
+    out_path.write_text(report, encoding="utf-8")
+    return str(out_path)

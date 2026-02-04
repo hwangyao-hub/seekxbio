@@ -92,50 +92,53 @@ class TrainingPage(QWidget):
         layout.setSpacing(16)
 
         title = QLabel("Training")
-        title.setStyleSheet("font-size: 18px; font-weight: 600; color: #111827;")
+        title.setStyleSheet("font-size: 18px; font-weight: 600; color: #e5e7eb;")
         layout.addWidget(title)
 
         self.setStyleSheet(
             """
-            QWidget { background: #F8FAFC; color: #111827; }
+            QWidget { background: #0a0e1a; color: #e5e7eb; }
             QGroupBox {
-                border: 1px solid #E5E7EB;
-                border-radius: 6px;
+                border: 1px solid #30363d;
+                border-radius: 8px;
                 margin-top: 8px;
                 padding: 10px;
-                background: #FFFFFF;
+                background: #0d1117;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 10px;
                 padding: 0 4px 0 4px;
-                color: #111827;
+                color: #e5e7eb;
                 font-weight: 600;
             }
             QLineEdit, QComboBox, QSpinBox, QCheckBox {
-                background: #FFFFFF;
-                border: 1px solid #E5E7EB;
-                border-radius: 4px;
+                background: #161b22;
+                border: 1px solid #374151;
+                border-radius: 6px;
                 padding: 4px;
+                color: #e5e7eb;
             }
             QPushButton {
-                border: 1px solid #E5E7EB;
-                border-radius: 4px;
+                border: 1px solid #374151;
+                border-radius: 6px;
                 padding: 6px 10px;
-                background: #FFFFFF;
+                background: #161b22;
+                color: #e5e7eb;
             }
             QPushButton#primary {
-                background: #2563EB;
+                background: #f97316;
                 color: #FFFFFF;
-                border: 1px solid #2563EB;
+                border: 1px solid #f97316;
                 font-weight: 600;
             }
             QPlainTextEdit {
-                background: #F3F4F6;
-                border: 1px solid #E5E7EB;
-                border-radius: 4px;
+                background: #161b22;
+                border: 1px solid #374151;
+                border-radius: 6px;
                 font-family: Consolas, "Courier New", monospace;
                 font-size: 12px;
+                color: #e5e7eb;
             }
             """
         )

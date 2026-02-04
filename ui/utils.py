@@ -39,3 +39,10 @@ def default_yaml_path() -> Path:
 
 def default_weights_path() -> Path | None:
     return find_latest_model(project_root() / "runs" / "detect")
+
+
+def read_version() -> str:
+    version_path = project_root() / "VERSION"
+    if not version_path.exists():
+        return "0.0.0"
+    return version_path.read_text(encoding="utf-8").strip() or "0.0.0"

@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
 )
 
-from core import scan_dataset
+from core import scan_dataset, save_dataset_report
 from core.constants import CLASS_NAMES_CN
 from ui.utils import get_setting, set_setting
 
@@ -30,37 +30,38 @@ class DashboardPage(QWidget):
         layout.setSpacing(16)
 
         title = QLabel("Dashboard")
-        title.setStyleSheet("font-size: 18px; font-weight: 600; color: #111827;")
+        title.setStyleSheet("font-size: 18px; font-weight: 600; color: #e5e7eb;")
         layout.addWidget(title)
 
         self.setStyleSheet(
             """
-            QWidget { background: #F8FAFC; color: #111827; }
+            QWidget { background: #0a0e1a; color: #e5e7eb; }
             QGroupBox {
-                border: 1px solid #E5E7EB;
-                border-radius: 6px;
+                border: 1px solid #30363d;
+                border-radius: 8px;
                 margin-top: 8px;
                 padding: 10px;
-                background: #FFFFFF;
+                background: #0d1117;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 10px;
                 padding: 0 4px 0 4px;
-                color: #111827;
+                color: #e5e7eb;
                 font-weight: 600;
             }
             QLineEdit, QTextEdit {
-                background: #FFFFFF;
-                border: 1px solid #E5E7EB;
-                border-radius: 4px;
+                background: #161b22;
+                border: 1px solid #374151;
+                border-radius: 6px;
                 padding: 4px;
             }
             QPushButton {
-                border: 1px solid #E5E7EB;
-                border-radius: 4px;
+                border: 1px solid #374151;
+                border-radius: 6px;
                 padding: 6px 10px;
-                background: #FFFFFF;
+                background: #161b22;
+                color: #e5e7eb;
             }
             """
         )
@@ -89,7 +90,7 @@ class DashboardPage(QWidget):
 
         self.chart_label = QLabel("Class distribution chart will appear here after scan.")
         self.chart_label.setMinimumHeight(220)
-        self.chart_label.setStyleSheet("background: #FFFFFF; border: 1px solid #E5E7EB;")
+        self.chart_label.setStyleSheet("background: #0d1117; border: 1px solid #30363d;")
         self.chart_label.setScaledContents(True)
 
         card_layout.addLayout(input_row)
@@ -130,6 +131,13 @@ class DashboardPage(QWidget):
                     lines.append(f"- {cn_name} (ID {class_id}): {v}")
             else:
                 lines.append("- none")
+            report_path = save_dataset_report(
+                stats,
+                str(Path(__file__).resolve().parents[2] / "outputs" / "reports"),
+                class_name_map=CLASS_NAMES_CN,
+            )
+            lines.append("")
+            lines.append(f"Report saved: {report_path}")
             self.summary.setPlainText("\n".join(lines))
             self._update_chart(stats)
         except Exception as exc:
@@ -162,6 +170,7 @@ class DashboardPage(QWidget):
             labels = [f"{CLASS_NAMES_CN.get(i, str(i))}\n(ID:{i})" for i in ids]
 
             fig, ax = plt.subplots(figsize=(10, 4))
+            fig.patch.set_facecolor("#0d1117")
             bars = ax.bar(
                 range(len(ids)),
                 counts,
@@ -170,11 +179,13 @@ class DashboardPage(QWidget):
                 linewidth=1.2,
             )
             ax.set_xticks(range(len(ids)))
-            ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
-            ax.set_xlabel("Cell Class", fontsize=11)
-            ax.set_ylabel("Count", fontsize=11)
-            ax.set_title("Dataset Class Distribution", fontsize=12, fontweight="bold")
-            ax.grid(axis="y", alpha=0.3, linestyle="--")
+            ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8, color="#9ca3af")
+            ax.set_xlabel("Cell Class", fontsize=11, color="#9ca3af")
+            ax.set_ylabel("Count", fontsize=11, color="#9ca3af")
+            ax.set_title("Dataset Class Distribution", fontsize=12, fontweight="bold", color="#e5e7eb")
+            ax.grid(axis="y", alpha=0.3, linestyle="--", color="#374151")
+            ax.tick_params(colors="#9ca3af")
+            ax.set_facecolor("#0d1117")
             for bar, count in zip(bars, counts):
                 height = bar.get_height()
                 ax.text(
@@ -184,6 +195,7 @@ class DashboardPage(QWidget):
                     ha="center",
                     va="bottom",
                     fontsize=7,
+                    color="#e5e7eb",
                 )
             plt.tight_layout()
 

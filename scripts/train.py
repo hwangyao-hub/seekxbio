@@ -36,6 +36,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Remap classes to remove gaps by rewriting temp labels.",
     )
+    parser.add_argument(
+        "--no-freeze-splits",
+        action="store_false",
+        dest="freeze_splits",
+        help="Disable freezing train/val lists into a snapshot YAML.",
+    )
     return parser.parse_args()
 
 
@@ -57,6 +63,7 @@ def main() -> None:
         limit_train_images=args.limit_train,
         limit_val_images=args.limit_val,
         remap_classes=args.remap_classes,
+        freeze_splits=args.freeze_splits,
     )
 
 

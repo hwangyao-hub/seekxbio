@@ -1,4 +1,10 @@
-from .dataset_utils import build_val_split, scan_dataset, scan_dataset_from_yaml
+from .dataset_utils import (
+    build_val_split,
+    scan_dataset,
+    scan_dataset_from_yaml,
+    format_dataset_report,
+    save_dataset_report,
+)
 from .infer_core import (
     export_xanylabeling_json,
     infer_and_count,
@@ -7,6 +13,7 @@ from .infer_core import (
     load_class_names,
     render_counts_overlay,
 )
+from .class_mapping import load_class_mapping_rows, save_class_mapping_rows, rows_to_maps
 from .train_core import get_run_outputs, train_yolov8, train_yolov8_stream
 from .utils import resolve_device, set_reproducibility
 
@@ -17,10 +24,15 @@ __all__ = [
     "load_class_mapping_csv",
     "load_class_names",
     "render_counts_overlay",
+    "load_class_mapping_rows",
+    "save_class_mapping_rows",
+    "rows_to_maps",
     "resolve_device",
     "build_val_split",
     "scan_dataset",
     "scan_dataset_from_yaml",
+    "format_dataset_report",
+    "save_dataset_report",
     "set_reproducibility",
     "get_run_outputs",
     "train_yolov8",

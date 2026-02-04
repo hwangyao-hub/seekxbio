@@ -25,3 +25,7 @@ build/
 dist/
 *.spec
 __pycache__/
+
+# design exports
+figma_ui/
+显微镜细胞检测系统界面设计.zip

@@ -215,47 +215,50 @@ class InferencePage(QWidget):
         layout.setSpacing(16)
 
         title = QLabel("Inference")
-        title.setStyleSheet("font-size: 18px; font-weight: 600; color: #111827;")
+        title.setStyleSheet("font-size: 18px; font-weight: 600; color: #e5e7eb;")
         layout.addWidget(title)
 
         self.setStyleSheet(
             """
-            QWidget { background: #F8FAFC; color: #111827; }
+            QWidget { background: #0a0e1a; color: #e5e7eb; }
             QGroupBox {
-                border: 1px solid #E5E7EB;
-                border-radius: 6px;
+                border: 1px solid #30363d;
+                border-radius: 8px;
                 margin-top: 8px;
                 padding: 10px;
-                background: #FFFFFF;
+                background: #0d1117;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 10px;
                 padding: 0 4px 0 4px;
-                color: #111827;
+                color: #e5e7eb;
                 font-weight: 600;
             }
             QLineEdit, QComboBox, QDoubleSpinBox {
-                background: #FFFFFF;
-                border: 1px solid #E5E7EB;
-                border-radius: 4px;
+                background: #161b22;
+                border: 1px solid #374151;
+                border-radius: 6px;
                 padding: 4px;
+                color: #e5e7eb;
             }
             QPushButton {
-                border: 1px solid #E5E7EB;
-                border-radius: 4px;
+                border: 1px solid #374151;
+                border-radius: 6px;
                 padding: 6px 10px;
-                background: #FFFFFF;
+                background: #161b22;
+                color: #e5e7eb;
             }
             QPushButton#primary {
-                background: #2563EB;
+                background: #f97316;
                 color: #FFFFFF;
-                border: 1px solid #2563EB;
+                border: 1px solid #f97316;
                 font-weight: 600;
             }
             QTableWidget {
-                background: #FFFFFF;
-                border: 1px solid #E5E7EB;
+                background: #161b22;
+                border: 1px solid #374151;
+                color: #e5e7eb;
             }
             """
         )
@@ -478,7 +481,7 @@ class InferencePage(QWidget):
         self.status_label.setText("Status: Completed")
 
         if self.save_anylabel.isChecked():
-            out_dir = Path(self.output_dir.text().strip())
+            out_dir = self._resolve_output_dir()
             out_dir.mkdir(parents=True, exist_ok=True)
             image_src = Path(self.image_edit.text().strip())
             image_dst = out_dir / image_src.name
@@ -520,8 +523,7 @@ class InferencePage(QWidget):
         if not app_py.exists():
             self.status_label.setText("Status: X-AnyLabeling not found")
             return
-        output_dir = self.output_dir.text().strip() or "outputs/xanylabeling"
-        output_dir = str((project_root() / output_dir).resolve()) if not Path(output_dir).is_absolute() else output_dir
+        output_dir = str(self._resolve_output_dir().resolve())
         labels_path = ""
         output_json = None
         if self.last_xanylabel_json and self.last_xanylabel_json.exists():
@@ -554,3 +556,10 @@ class InferencePage(QWidget):
         if weights.exists():
             self.weights_edit.setText(str(weights))
             set_setting("weights_path", str(weights))
+
+    def _resolve_output_dir(self) -> Path:
+        raw = self.output_dir.text().strip() or "outputs/xanylabeling"
+        out_dir = Path(raw)
+        if not out_dir.is_absolute():
+            out_dir = (project_root() / out_dir).resolve()
+        return out_dir

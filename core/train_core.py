@@ -286,6 +286,69 @@ def _build_subset_yaml(
     return str(out_yaml)
 
 
+def _build_frozen_yaml(
+    data_yaml: str,
+    work_dir: Path,
+    remap_classes: bool,
+) -> str:
+    try:
+        import yaml
+    except Exception as exc:
+        raise ImportError(
+            "PyYAML is required for dataset freezing. "
+            "Install with: pip install pyyaml"
+        ) from exc
+
+    with open(data_yaml, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    root = Path(data.get("path", "")).expanduser()
+    train_entry = data.get("train")
+    val_entry = data.get("val")
+
+    if not train_entry or not val_entry:
+        raise ValueError("Dataset YAML must contain both 'train' and 'val' fields.")
+
+    train_list = _collect_images(root, train_entry)
+    val_list = _collect_images(root, val_entry)
+    if not train_list:
+        raise FileNotFoundError("No training images found with the given dataset YAML.")
+    if not val_list:
+        raise FileNotFoundError("No validation images found with the given dataset YAML.")
+
+    tmp_dir = work_dir / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    if remap_classes:
+        names_list = _names_list_from_data(data)
+        used_ids = _collect_used_class_ids(train_list)
+        if used_ids:
+            train_txt, val_txt, new_names = _build_remap_dataset(
+                root=root,
+                train_list=train_list,
+                val_list=val_list,
+                tmp_dir=tmp_dir,
+                names_list=names_list,
+                used_ids=used_ids,
+            )
+            data["names"] = new_names
+        else:
+            train_txt = _write_list_file(train_list, tmp_dir / "train_frozen.txt")
+            val_txt = _write_list_file(val_list, tmp_dir / "val_frozen.txt")
+    else:
+        train_txt = _write_list_file(train_list, tmp_dir / "train_frozen.txt")
+        val_txt = _write_list_file(val_list, tmp_dir / "val_frozen.txt")
+        data = _trim_unused_tail_classes(data, train_list)
+
+    data["path"] = ""
+    data["train"] = train_txt
+    data["val"] = val_txt
+
+    out_yaml = tmp_dir / "data_frozen.yaml"
+    with open(out_yaml, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+    return str(out_yaml)
+
+
 def train_yolov8(
     data_yaml: str,
     model_name: str = "yolov8n.pt",
@@ -301,6 +364,7 @@ def train_yolov8(
     limit_train_images: int = 0,
     limit_val_images: int = 0,
     remap_classes: bool = False,
+    freeze_splits: bool = True,
 ) -> dict[str, str]:
     """
     Train a YOLOv8 model. Returns output paths (save_dir, best, last).
@@ -319,6 +383,12 @@ def train_yolov8(
             limit_train=limit_train_images,
             limit_val=limit_val_images,
             seed=seed,
+            work_dir=Path(project).resolve() / name,
+            remap_classes=remap_classes,
+        )
+    elif freeze_splits:
+        run_data_yaml = _build_frozen_yaml(
+            data_yaml=str(data_path),
             work_dir=Path(project).resolve() / name,
             remap_classes=remap_classes,
         )
@@ -421,6 +491,7 @@ def train_yolov8_stream(
     limit_train_images: int = 0,
     limit_val_images: int = 0,
     remap_classes: bool = False,
+    freeze_splits: bool = True,
 ) -> "list[str] | None":
     cmd = [
         sys.executable,
@@ -454,6 +525,8 @@ def train_yolov8_stream(
         cmd += ["--limit-val", str(limit_val_images)]
     if remap_classes:
         cmd += ["--remap-classes"]
+    if not freeze_splits:
+        cmd += ["--no-freeze-splits"]
 
     root = Path(__file__).resolve().parents[1]
     proc = subprocess.Popen(

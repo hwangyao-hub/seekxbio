@@ -31,8 +31,12 @@ from core import (
     train_yolov8_stream,
     get_run_outputs,
     export_xanylabeling_json,
+    save_dataset_report,
+    load_class_mapping_rows,
+    save_class_mapping_rows,
+    rows_to_maps,
 )
-from core.constants import CLASS_NAMES_CN, DEVICE_OPTIONS, MODEL_OPTIONS
+from core.constants import DEVICE_OPTIONS, MODEL_OPTIONS
 from core.utils import resolve_device
 
 # ============================================================================
@@ -43,9 +47,17 @@ DEFAULT_DATASET_ROOT = str(ROOT / "data")
 DEFAULT_YAML_PATH = str(ROOT / "data" / "cell.yaml")
 DEFAULT_OUTPUT_DIR = str(ROOT / "outputs" / "infer")
 RUNS_DIR = str(ROOT / "runs" / "detect")
+REPORTS_DIR = str(ROOT / "outputs" / "reports")
 
-# Software version - update this when making changes
-VERSION = "1.1.1"
+def _read_version() -> str:
+    version_path = ROOT / "VERSION"
+    if not version_path.exists():
+        return "0.0.0"
+    return version_path.read_text(encoding="utf-8").strip() or "0.0.0"
+
+
+# Software version (single source of truth)
+VERSION = _read_version()
 
 # Shared constants live in core.constants to keep UI parity.
 
@@ -103,6 +115,7 @@ def find_latest_model(runs_dir: str | Path) -> str | None:
 
 def format_dataset_stats(stats: dict) -> str:
     """Format dataset statistics for display."""
+    _, cn_map = get_active_class_maps()
     lines = [
         f"📁 Dataset root: {stats.get('dataset_root', '')}",
         f"📂 Layout: {stats.get('layout', 'unknown')}",
@@ -124,12 +137,67 @@ def format_dataset_stats(stats: dict) -> str:
     class_counts = stats.get("class_counts", {})
     if class_counts:
         for k, v in sorted(class_counts.items(), key=lambda x: int(x[0])):
-            cn_name = CLASS_NAMES_CN.get(int(k), f"Class {k}")
+            cn_name = cn_map.get(int(k), f"Class {k}")
             lines.append(f"  • {cn_name} (ID {k}): {v}")
     else:
         lines.append("  • none")
 
     return "\n".join(lines)
+
+
+def get_active_class_maps() -> tuple[dict[int, str], dict[int, str]]:
+    rows = load_class_mapping_rows(ROOT)
+    return rows_to_maps(rows)
+
+
+def class_mapping_rows() -> list[list[object]]:
+    rows = load_class_mapping_rows(ROOT)
+    return [[row["id"], row.get("en", ""), row.get("cn", "")] for row in rows]
+
+
+def save_class_mapping_table(table: list[list[object]]) -> tuple[str, list[list[object]]]:
+    by_id: dict[int, dict[str, object]] = {}
+    for row in table or []:
+        if not row or len(row) < 1:
+            continue
+        try:
+            cid = int(row[0])
+        except Exception:
+            continue
+        en = str(row[1]).strip() if len(row) > 1 and row[1] is not None else ""
+        cn = str(row[2]).strip() if len(row) > 2 and row[2] is not None else ""
+        by_id[cid] = {"id": cid, "en": en, "cn": cn}
+    if not by_id:
+        return "❌ Error: No valid rows to save.", class_mapping_rows()
+    path = save_class_mapping_rows(ROOT, by_id.values())
+    return f"✅ Saved: {path}", class_mapping_rows()
+
+
+def delete_class_mapping_row(
+    table: list[list[object]], delete_id: int | float | str
+) -> tuple[str, list[list[object]]]:
+    try:
+        cid = int(delete_id)
+    except Exception:
+        return "❌ Error: Invalid ID.", table or []
+    new_rows: list[list[object]] = []
+    removed = False
+    for row in table or []:
+        if not row or len(row) < 1:
+            continue
+        try:
+            row_id = int(row[0])
+        except Exception:
+            continue
+        if row_id == cid:
+            removed = True
+            continue
+        en = str(row[1]).strip() if len(row) > 1 and row[1] is not None else ""
+        cn = str(row[2]).strip() if len(row) > 2 and row[2] is not None else ""
+        new_rows.append([row_id, en, cn])
+    if not removed:
+        return f"⚠️ ID {cid} not found.", table or []
+    return f"✅ Removed ID {cid}.", new_rows
 
 
 def get_class_distribution_chart(stats: dict) -> np.ndarray | None:
@@ -148,7 +216,8 @@ def get_class_distribution_chart(stats: dict) -> np.ndarray | None:
         items = sorted(class_counts.items(), key=lambda x: int(x[0]))
         ids = [int(k) for k, v in items]
         counts = [v for k, v in items]
-        labels = [f"{CLASS_NAMES_CN.get(i, str(i))}\n(ID:{i})" for i in ids]
+        _, cn_map = get_active_class_maps()
+        labels = [f"{cn_map.get(i, str(i))}\n(ID:{i})" for i in ids]
 
         # Create figure
         fig, ax = plt.subplots(figsize=(14, 6))
@@ -202,7 +271,9 @@ def scan_dataset_handler(dataset_root: str) -> tuple[str, np.ndarray | None]:
             return "❌ Error: Dataset root does not exist.", None
 
         stats = scan_dataset(dataset_root)
-        text_output = format_dataset_stats(stats)
+        _, cn_map = get_active_class_maps()
+        report_path = save_dataset_report(stats, REPORTS_DIR, class_name_map=cn_map)
+        text_output = format_dataset_stats(stats) + f"\n\nReport saved: {report_path}"
         chart = get_class_distribution_chart(stats)
         return text_output, chart
     except Exception as e:
@@ -216,7 +287,9 @@ def scan_from_yaml(yaml_path: str) -> tuple[str, np.ndarray | None]:
             return "❌ Error: YAML file does not exist.", None
 
         stats = scan_dataset_from_yaml(yaml_path)
-        text_output = format_dataset_stats(stats)
+        _, cn_map = get_active_class_maps()
+        report_path = save_dataset_report(stats, REPORTS_DIR, class_name_map=cn_map)
+        text_output = format_dataset_stats(stats) + f"\n\nReport saved: {report_path}"
         chart = get_class_distribution_chart(stats)
         return text_output, chart
     except Exception as e:
@@ -444,7 +517,8 @@ def run_inference(
         pil_image.save(temp_path, quality=jpeg_quality, optimize=True)
 
         # Determine label mapping
-        label_mapping = CLASS_NAMES_CN if use_chinese_labels else None
+        _, cn_map = get_active_class_maps()
+        label_mapping = cn_map if use_chinese_labels else None
 
         # Run inference
         vis_img, counts, total, dets = infer_and_count(
@@ -476,8 +550,9 @@ def run_inference(
 
         # Format results
         result_lines = [f"🎯 Total cells detected: {total}", "", "📊 Per-class counts:"]
+        _, cn_map = get_active_class_maps()
         for cls_id, count in sorted(counts.items()):
-            name = CLASS_NAMES_CN.get(cls_id, f"Class {cls_id}")
+            name = cn_map.get(cls_id, f"Class {cls_id}")
             result_lines.append(f"   • {name} (ID {cls_id}): {count}")
 
         return vis_img, "\n".join(result_lines)
@@ -558,6 +633,7 @@ def export_to_xanylabeling(
         pil_image.save(image_path, quality=jpeg_quality, optimize=True)
 
         # Run inference with detections
+        _, cn_map = get_active_class_maps()
         vis_img, counts, total, dets = infer_and_count(
             weights=weights_path,
             source_image=str(image_path),
@@ -566,7 +642,7 @@ def export_to_xanylabeling(
             iou=iou,
             device=device,
             return_dets=True,
-            label_mapping=CLASS_NAMES_CN,
+            label_mapping=cn_map,
         )
 
         # Export JSON with same base name
@@ -576,7 +652,7 @@ def export_to_xanylabeling(
             image_size=pil_image.size,
             detections=dets,
             output_json=str(output_json),
-            label_mapping=CLASS_NAMES_CN,
+            label_mapping=cn_map,
         )
 
         return f"✅ Exported to:\n   • Image: {image_path.name}\n   • JSON: {output_json.name}"
@@ -600,8 +676,57 @@ def create_interface() -> gr.Blocks:
         gr.Markdown(
             """
             <style>
+            :root { color-scheme: dark; }
+            body, .gradio-container {
+              background: #0a0e1a !important;
+              color: #e5e7eb !important;
+            }
+            .gradio-container {
+              font-family: "Inter", "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+            }
             .tab-item { font-size: 16px !important; font-weight: 500 !important; }
-            .output-text { font-family: monospace; white-space: pre-wrap; }
+            .output-text { font-family: "JetBrains Mono", Consolas, monospace; white-space: pre-wrap; }
+            .gradio-container .tabs { border-bottom: 1px solid #30363d; }
+            .gradio-container .tab-nav button {
+              background: transparent !important;
+              color: #9ca3af !important;
+              border: 0 !important;
+              padding: 10px 14px !important;
+            }
+            .gradio-container .tab-nav button.selected {
+              color: #60a5fa !important;
+              border-bottom: 2px solid #3b82f6 !important;
+            }
+            .card {
+              background: #0d1117 !important;
+              border: 1px solid #30363d !important;
+              border-radius: 10px !important;
+              padding: 16px !important;
+              box-shadow: none !important;
+            }
+            input, textarea, select {
+              background: #161b22 !important;
+              border: 1px solid #374151 !important;
+              color: #e5e7eb !important;
+              border-radius: 8px !important;
+            }
+            input::placeholder, textarea::placeholder { color: #6b7280 !important; }
+            button {
+              border-radius: 8px !important;
+              border: 1px solid #374151 !important;
+              background: #161b22 !important;
+              color: #e5e7eb !important;
+            }
+            .primary button, button.primary {
+              background: linear-gradient(90deg, #f97316, #ea580c) !important;
+              border: 0 !important;
+              color: #fff !important;
+            }
+            .accent button, button.accent {
+              background: #21262d !important;
+              border: 1px solid #374151 !important;
+              color: #cbd5f5 !important;
+            }
             </style>
             """
         )
@@ -621,50 +746,53 @@ def create_interface() -> gr.Blocks:
 
             with gr.Row():
                 with gr.Column(scale=1):
-                    dataset_root_input = gr.Textbox(
-                        label="数据集根目录",
-                        value=DEFAULT_DATASET_ROOT,
-                        placeholder="输入数据集根目录路径",
-                    )
-                    yaml_path_input = gr.Textbox(
-                        label="YAML 配置文件路径",
-                        value=DEFAULT_YAML_PATH,
-                        placeholder="输入 YAML 文件路径",
-                    )
-
-                    with gr.Row():
-                        scan_btn = gr.Button("🔍 扫描数据集", variant="primary")
-                        scan_yaml_btn = gr.Button(
-                            "🔍 从 YAML 扫描", variant="secondary"
+                    with gr.Group(elem_classes=["card"]):
+                        dataset_root_input = gr.Textbox(
+                            label="数据集根目录",
+                            value=DEFAULT_DATASET_ROOT,
+                            placeholder="输入数据集根目录路径",
+                        )
+                        yaml_path_input = gr.Textbox(
+                            label="YAML 配置文件路径",
+                            value=DEFAULT_YAML_PATH,
+                            placeholder="输入 YAML 文件路径",
                         )
 
-                    with gr.Row():
-                        regen_val_btn = gr.Button(
-                            "🔄 重新生成验证集", variant="secondary"
-                        )
-                        val_ratio = gr.Slider(
-                            label="验证集比例",
-                            minimum=0.05,
-                            maximum=0.5,
-                            value=0.1,
-                            step=0.05,
-                        )
+                        with gr.Row():
+                            scan_btn = gr.Button("🔍 扫描数据集", variant="primary", elem_classes=["primary"])
+                            scan_yaml_btn = gr.Button(
+                                "🔍 从 YAML 扫描", variant="secondary", elem_classes=["accent"]
+                            )
+
+                        with gr.Row():
+                            regen_val_btn = gr.Button(
+                                "🔄 重新生成验证集", variant="secondary", elem_classes=["accent"]
+                            )
+                            val_ratio = gr.Slider(
+                                label="验证集比例",
+                                minimum=0.05,
+                                maximum=0.5,
+                                value=0.1,
+                                step=0.05,
+                            )
 
                 with gr.Column(scale=2):
-                    dataset_stats_output = gr.Textbox(
-                        label="数据集统计",
-                        lines=20,
-                        max_lines=30,
-                        interactive=False,
-                        elem_classes=["output-text"],
-                    )
+                    with gr.Group(elem_classes=["card"]):
+                        dataset_stats_output = gr.Textbox(
+                            label="数据集统计",
+                            lines=20,
+                            max_lines=30,
+                            interactive=False,
+                            elem_classes=["output-text"],
+                        )
 
             with gr.Row():
-                class_dist_plot = gr.Image(
-                    label="类别分布图",
-                    type="numpy",
-                    interactive=False,
-                )
+                with gr.Group(elem_classes=["card"]):
+                    class_dist_plot = gr.Image(
+                        label="类别分布图",
+                        type="numpy",
+                        interactive=False,
+                    )
 
             regen_val_output = gr.Textbox(label="验证集生成结果", interactive=False)
 
@@ -693,75 +821,78 @@ def create_interface() -> gr.Blocks:
 
             with gr.Row():
                 with gr.Column(scale=1):
-                    gr.Markdown("#### 数据集与模型配置")
-                    train_yaml_input = gr.Textbox(
-                        label="数据集 YAML 文件",
-                        value=DEFAULT_YAML_PATH,
-                    )
-                    model_select = gr.Dropdown(
-                        label="预训练模型",
-                        choices=MODEL_OPTIONS,
-                        value="yolov8n.pt",
-                    )
-                    device_select = gr.Dropdown(
-                        label="计算设备",
-                        choices=DEVICE_OPTIONS,
-                        value="auto",
-                    )
+                    with gr.Group(elem_classes=["card"]):
+                        gr.Markdown("#### 数据集与模型配置")
+                        train_yaml_input = gr.Textbox(
+                            label="数据集 YAML 文件",
+                            value=DEFAULT_YAML_PATH,
+                        )
+                        model_select = gr.Dropdown(
+                            label="预训练模型",
+                            choices=MODEL_OPTIONS,
+                            value="yolov8n.pt",
+                        )
+                        device_select = gr.Dropdown(
+                            label="计算设备",
+                            choices=DEVICE_OPTIONS,
+                            value="auto",
+                        )
 
-                    check_dataset_btn = gr.Button("✅ 检查数据集", variant="secondary")
-                    check_output = gr.Textbox(
-                        label="检查结果", lines=5, interactive=False
-                    )
+                        check_dataset_btn = gr.Button("✅ 检查数据集", variant="secondary", elem_classes=["accent"])
+                        check_output = gr.Textbox(
+                            label="检查结果", lines=5, interactive=False
+                        )
 
                 with gr.Column(scale=1):
-                    gr.Markdown("#### 训练参数")
-                    epochs_input = gr.Slider(
-                        label="训练轮数 (Epochs)",
-                        minimum=1,
-                        maximum=1000,
-                        value=100,
-                        step=10,
-                    )
-                    batch_input = gr.Slider(
-                        label="批次大小 (Batch Size)",
-                        minimum=1,
-                        maximum=128,
-                        value=16,
-                        step=1,
-                    )
-                    imgsz_input = gr.Slider(
-                        label="图像尺寸 (Image Size)",
-                        minimum=320,
-                        maximum=1280,
-                        value=640,
-                        step=32,
-                    )
+                    with gr.Group(elem_classes=["card"]):
+                        gr.Markdown("#### 训练参数")
+                        epochs_input = gr.Slider(
+                            label="训练轮数 (Epochs)",
+                            minimum=1,
+                            maximum=1000,
+                            value=100,
+                            step=10,
+                        )
+                        batch_input = gr.Slider(
+                            label="批次大小 (Batch Size)",
+                            minimum=1,
+                            maximum=128,
+                            value=16,
+                            step=1,
+                        )
+                        imgsz_input = gr.Slider(
+                            label="图像尺寸 (Image Size)",
+                            minimum=320,
+                            maximum=1280,
+                            value=640,
+                            step=32,
+                        )
 
-                    with gr.Row():
-                        limit_train_input = gr.Number(
-                            label="限制训练图片数 (0=全部)",
-                            value=0,
-                            minimum=0,
-                        )
-                        limit_val_input = gr.Number(
-                            label="限制验证图片数 (0=全部)",
-                            value=0,
-                            minimum=0,
-                        )
+                        with gr.Row():
+                            limit_train_input = gr.Number(
+                                label="限制训练图片数 (0=全部)",
+                                value=0,
+                                minimum=0,
+                            )
+                            limit_val_input = gr.Number(
+                                label="限制验证图片数 (0=全部)",
+                                value=0,
+                                minimum=0,
+                            )
 
             with gr.Row():
-                start_train_btn = gr.Button("🚀 开始训练", variant="primary", size="lg")
-                stop_train_btn = gr.Button("⏹️ 停止训练", variant="stop", size="lg")
+                start_train_btn = gr.Button("🚀 开始训练", variant="primary", size="lg", elem_classes=["primary"])
+                stop_train_btn = gr.Button("⏹️ 停止训练", variant="stop", size="lg", elem_classes=["accent"])
 
-            train_logs_output = gr.Textbox(
-                label="训练日志",
-                lines=30,
-                max_lines=50,
-                interactive=False,
-                elem_classes=["output-text"],
-                autoscroll=True,
-            )
+            with gr.Group(elem_classes=["card"]):
+                train_logs_output = gr.Textbox(
+                    label="训练日志",
+                    lines=30,
+                    max_lines=50,
+                    interactive=False,
+                    elem_classes=["output-text"],
+                    autoscroll=True,
+                )
 
             # Event handlers
             check_dataset_btn.click(
@@ -796,55 +927,98 @@ def create_interface() -> gr.Blocks:
 
             with gr.Row():
                 with gr.Column(scale=1):
-                    gr.Markdown("#### 输入与参数")
-                    input_image = gr.Image(
-                        label="上传显微镜图像 (支持拖拽)",
-                        type="numpy",
-                        image_mode="RGB",
-                        height=400,  # 限制预览高度
-                        streaming=False,  # Disable streaming for faster upload
-                    )
-
-                    # Custom filename for export (defaults to timestamp)
-                    export_filename = gr.Textbox(
-                        label="导出文件名 (不含扩展名)",
-                        value="",
-                        placeholder="留空则使用当前时间戳",
-                        info="导出时会自动添加 .jpg 和 .json 扩展名",
-                    )
-
-                    image_info = gr.Textbox(
-                        label="图片信息",
-                        value="未选择图片",
-                        interactive=False,
-                    )
-
-                    # Update image info when image changes
-                    input_image.change(
-                        fn=get_image_info,
-                        inputs=[input_image],
-                        outputs=[image_info],
-                    )
-
-                    with gr.Row():
-                        preprocess_size = gr.Slider(
-                            label="最大边长限制 (0=不限制, 推荐1920)",
-                            info="大尺寸图片会被自动缩放，加快处理速度",
-                            minimum=0,
-                            maximum=4096,
-                            value=1920,
-                            step=64,
+                    with gr.Group(elem_classes=["card"]):
+                        gr.Markdown("#### 输入与参数")
+                        input_image = gr.Image(
+                            label="上传显微镜图像 (支持拖拽)",
+                            type="numpy",
+                            image_mode="RGB",
+                            height=400,  # 限制预览高度
+                            streaming=False,  # Disable streaming for faster upload
                         )
 
-                    speed_mode = gr.Radio(
-                        label="处理模式",
-                        choices=[
-                            ("⚡ 极速模式 (最大1280, JPEG 85%)", 1280),
-                            ("🚀 平衡模式 (最大1920, JPEG 95%)", 1920),
-                            ("🎯 质量模式 (不压缩)", 0),
-                        ],
-                        value=1920,
-                    )
+                        # Custom filename for export (defaults to timestamp)
+                        export_filename = gr.Textbox(
+                            label="导出文件名 (不含扩展名)",
+                            value="",
+                            placeholder="留空则使用当前时间戳",
+                            info="导出时会自动添加 .jpg 和 .json 扩展名",
+                        )
+
+                        image_info = gr.Textbox(
+                            label="图片信息",
+                            value="未选择图片",
+                            interactive=False,
+                        )
+                        with gr.Row():
+                            preprocess_size = gr.Slider(
+                                label="最大边长限制 (0=不限制, 推荐1920)",
+                                info="大尺寸图片会被自动缩放，加快处理速度",
+                                minimum=0,
+                                maximum=4096,
+                                value=1920,
+                                step=64,
+                            )
+
+                        speed_mode = gr.Radio(
+                            label="处理模式",
+                            choices=[
+                                ("⚡ 极速模式 (最大1280, JPEG 85%)", 1280),
+                                ("🚀 平衡模式 (最大1920, JPEG 95%)", 1920),
+                                ("🎯 质量模式 (不压缩)", 0),
+                            ],
+                            value=1920,
+                        )
+
+                        weights_input = gr.Textbox(
+                            label="模型权重路径",
+                            value=auto_find_weights(),
+                            placeholder="选择 .pt 权重文件",
+                        )
+                        auto_find_btn = gr.Button(
+                            "🔍 自动查找最新模型", size="sm", elem_classes=["accent"]
+                        )
+
+                        with gr.Row():
+                            infer_imgsz = gr.Slider(
+                                label="图像尺寸",
+                                minimum=320,
+                                maximum=1280,
+                                value=640,
+                                step=32,
+                            )
+                            infer_conf = gr.Slider(
+                                label="置信度阈值",
+                                minimum=0.0,
+                                maximum=1.0,
+                                value=0.25,
+                                step=0.01,
+                            )
+
+                        with gr.Row():
+                            infer_iou = gr.Slider(
+                                label="IoU 阈值",
+                                minimum=0.0,
+                                maximum=1.0,
+                                value=0.45,
+                                step=0.01,
+                            )
+                            infer_device = gr.Dropdown(
+                                label="计算设备",
+                                choices=DEVICE_OPTIONS,
+                                value="auto",
+                            )
+
+                        use_cn_labels = gr.Checkbox(
+                            label="使用中文类别名称",
+                            value=True,
+                        )
+
+                        gr.Markdown("💡 **提示**: 如果图片加载慢，请调小『最大边长限制』")
+
+                        run_infer_btn = gr.Button(
+                            "🔍 运行推理", variant="primary", size="lg", elem_classes=["primary"]
+                        )
 
                     # Link speed mode to preprocess_size
                     def update_preprocess_size(mode_value):
@@ -856,77 +1030,38 @@ def create_interface() -> gr.Blocks:
                         outputs=[preprocess_size],
                     )
 
-                    weights_input = gr.Textbox(
-                        label="模型权重路径",
-                        value=auto_find_weights(),
-                        placeholder="选择 .pt 权重文件",
-                    )
-                    auto_find_btn = gr.Button("🔍 自动查找最新模型", size="sm")
-
-                    with gr.Row():
-                        infer_imgsz = gr.Slider(
-                            label="图像尺寸",
-                            minimum=320,
-                            maximum=1280,
-                            value=640,
-                            step=32,
-                        )
-                        infer_conf = gr.Slider(
-                            label="置信度阈值",
-                            minimum=0.0,
-                            maximum=1.0,
-                            value=0.25,
-                            step=0.01,
-                        )
-
-                    with gr.Row():
-                        infer_iou = gr.Slider(
-                            label="IoU 阈值",
-                            minimum=0.0,
-                            maximum=1.0,
-                            value=0.45,
-                            step=0.01,
-                        )
-                        infer_device = gr.Dropdown(
-                            label="计算设备",
-                            choices=DEVICE_OPTIONS,
-                            value="auto",
-                        )
-
-                    use_cn_labels = gr.Checkbox(
-                        label="使用中文类别名称",
-                        value=True,
-                    )
-
-                    gr.Markdown("💡 **提示**: 如果图片加载慢，请调小『最大边长限制』")
-
-                    run_infer_btn = gr.Button(
-                        "🔍 运行推理", variant="primary", size="lg"
+                    # Update image info when image changes
+                    input_image.change(
+                        fn=get_image_info,
+                        inputs=[input_image],
+                        outputs=[image_info],
                     )
 
                 with gr.Column(scale=2):
-                    gr.Markdown("#### 检测结果")
-                    output_image = gr.Image(
-                        label="检测结果",
-                        type="pil",
-                        interactive=False,
-                    )
-                    inference_results = gr.Textbox(
-                        label="检测统计",
-                        lines=25,
-                        interactive=False,
-                        elem_classes=["output-text"],
-                    )
+                    with gr.Group(elem_classes=["card"]):
+                        gr.Markdown("#### 检测结果")
+                        output_image = gr.Image(
+                            label="检测结果",
+                            type="pil",
+                            interactive=False,
+                        )
+                        inference_results = gr.Textbox(
+                            label="检测统计",
+                            lines=25,
+                            interactive=False,
+                            elem_classes=["output-text"],
+                        )
 
             with gr.Row():
                 with gr.Column():
-                    gr.Markdown("#### 导出到 X-AnyLabeling")
-                    export_dir = gr.Textbox(
-                        label="输出目录",
-                        value=str(ROOT / "outputs" / "xanylabeling"),
-                    )
-                    export_btn = gr.Button("📤 导出标注文件", variant="secondary")
-                    export_output = gr.Textbox(label="导出结果", interactive=False)
+                    with gr.Group(elem_classes=["card"]):
+                        gr.Markdown("#### 导出到 X-AnyLabeling")
+                        export_dir = gr.Textbox(
+                            label="输出目录",
+                            value=str(ROOT / "outputs" / "xanylabeling"),
+                        )
+                        export_btn = gr.Button("📤 导出标注文件", variant="secondary", elem_classes=["accent"])
+                        export_output = gr.Textbox(label="导出结果", interactive=False)
 
             # Event handlers
             auto_find_btn.click(
@@ -975,21 +1110,44 @@ def create_interface() -> gr.Blocks:
 
             with gr.Row():
                 with gr.Column():
-                    gr.Markdown("#### 系统信息")
-                    device_info = gr.Textbox(
-                        label="设备信息",
-                        value=f"PyTorch: {resolve_device('auto')}",
-                        interactive=False,
-                    )
+                    with gr.Group(elem_classes=["card"]):
+                        gr.Markdown("#### 系统信息")
+                        device_info = gr.Textbox(
+                            label="设备信息",
+                            value=f"PyTorch: {resolve_device('auto')}",
+                            interactive=False,
+                        )
 
-                    gr.Markdown("#### 类别名称映射")
-                    class_mapping_text = gr.Textbox(
-                        label="类别映射 (ID: 中文名称)",
-                        value="\n".join(
-                            [f"{k}: {v}" for k, v in CLASS_NAMES_CN.items()]
-                        ),
-                        lines=25,
-                        interactive=False,
+                    with gr.Group(elem_classes=["card"]):
+                        gr.Markdown("#### 类别名称映射")
+                        class_mapping_table = gr.Dataframe(
+                            headers=["ID", "English", "中文"],
+                            datatype=["number", "str", "str"],
+                            value=class_mapping_rows(),
+                            row_count=(len(class_mapping_rows()), "dynamic"),
+                            col_count=(3, "fixed"),
+                            interactive=True,
+                            label="类别映射（可编辑）",
+                        )
+                        delete_id = gr.Number(label="删除行 ID", value=None)
+                        delete_btn = gr.Button("🗑️ 删除行", variant="secondary", elem_classes=["accent"])
+                        save_mapping_btn = gr.Button("💾 保存映射", variant="primary", elem_classes=["primary"])
+                        reset_mapping_btn = gr.Button("↩️ 恢复默认映射", variant="secondary", elem_classes=["accent"])
+                        mapping_status = gr.Textbox(label="状态", interactive=False)
+
+                    save_mapping_btn.click(
+                        fn=save_class_mapping_table,
+                        inputs=[class_mapping_table],
+                        outputs=[mapping_status, class_mapping_table],
+                    )
+                    delete_btn.click(
+                        fn=delete_class_mapping_row,
+                        inputs=[class_mapping_table, delete_id],
+                        outputs=[mapping_status, class_mapping_table],
+                    )
+                    reset_mapping_btn.click(
+                        fn=lambda: ("✅ 已恢复默认映射（未保存）", class_mapping_rows()),
+                        outputs=[mapping_status, class_mapping_table],
                     )
 
         gr.Markdown(

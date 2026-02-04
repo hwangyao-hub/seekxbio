@@ -7,10 +7,10 @@ from PySide6.QtWidgets import (
 )
 
 from ui.top_bar import TopBar
-from ui.side_bar import SideBar
 from ui.pages.dashboard_page import DashboardPage
 from ui.pages.inference_page import InferencePage
 from ui.pages.training_page import TrainingPage
+from ui.pages.settings_page import SettingsPage
 
 
 class MainWindow(QMainWindow):
@@ -22,38 +22,33 @@ class MainWindow(QMainWindow):
         # ===== Central Layout =====
         central = QWidget()
         self.setCentralWidget(central)
+        central.setStyleSheet("background: #0a0e1a;")
 
         root_layout = QVBoxLayout(central)
         root_layout.setContentsMargins(0, 0, 0, 0)
 
-        # ===== Top Bar =====
+        # ===== Top Bar (Header + Tabs) =====
         self.top_bar = TopBar()
         root_layout.addWidget(self.top_bar)
 
         # ===== Main Area =====
-        main_area = QWidget()
-        main_layout = QHBoxLayout(main_area)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.sidebar = SideBar()
         self.stack = QStackedWidget()
 
-        # Pages
+        # Pages (order matches tabs)
         self.dashboard_page = DashboardPage()
-        self.inference_page = InferencePage()
         self.training_page = TrainingPage()
+        self.inference_page = InferencePage()
+        self.settings_page = SettingsPage()
 
         self.stack.addWidget(self.dashboard_page)
-        self.stack.addWidget(self.inference_page)
         self.stack.addWidget(self.training_page)
+        self.stack.addWidget(self.inference_page)
+        self.stack.addWidget(self.settings_page)
 
-        main_layout.addWidget(self.sidebar)
-        main_layout.addWidget(self.stack, 1)
-
-        root_layout.addWidget(main_area, 1)
+        root_layout.addWidget(self.stack, 1)
 
         # ===== Signals =====
-        self.sidebar.page_changed.connect(self.stack.setCurrentIndex)
+        self.top_bar.tab_changed.connect(self.stack.setCurrentIndex)
         self.inference_page.model_changed.connect(self.top_bar.set_model)
         self.inference_page.device_changed.connect(self.top_bar.set_device)
         self.dashboard_page.dataset_root_changed.connect(self.training_page.set_dataset_root)
