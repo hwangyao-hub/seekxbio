@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QLineEdit,
 )
+from PySide6.QtGui import QShortcut, QKeySequence
 
 from core import image_to_label_path, load_class_mapping_rows, rows_to_maps
 from ui.utils import project_root
@@ -251,9 +252,13 @@ class AnnotationDialog(QDialog):
         btn_row = QHBoxLayout()
         self.add_btn = QPushButton("添加框")
         self.delete_btn = QPushButton("删除框")
+        self.undo_btn = QPushButton("↩ 撤销")
+        self.redo_btn = QPushButton("↪ 重做")
         self.save_btn = QPushButton("保存标签")
         btn_row.addWidget(self.add_btn)
         btn_row.addWidget(self.delete_btn)
+        btn_row.addWidget(self.undo_btn)
+        btn_row.addWidget(self.redo_btn)
         btn_row.addWidget(self.save_btn)
         right.addLayout(btn_row)
 
@@ -264,6 +269,8 @@ class AnnotationDialog(QDialog):
         self.add_btn.clicked.connect(self.enable_add_mode)
         self.delete_btn.clicked.connect(self.delete_selected)
         self.save_btn.clicked.connect(self.save_labels)
+        self.undo_btn.clicked.connect(self.undo)
+        self.redo_btn.clicked.connect(self.redo)
         self.table.itemSelectionChanged.connect(self.on_table_select)
         self.class_select.currentIndexChanged.connect(self.on_class_change)
         self.scene.selectionChanged.connect(self.on_scene_select)
@@ -272,9 +279,16 @@ class AnnotationDialog(QDialog):
         self.image_size = (0, 0)
         self._next_id = 0
         self.items: dict[int, AnnotationRectItem] = {}
+        self._history: list[list[dict]] = []
+        self._redo_stack: list[list[dict]] = []
+        self._max_history = 50
+        self._clipboard: list[dict] | None = None
+        self._restoring = False
 
         self.load_image()
         self.load_detections(detections)
+        self._save_state()
+        self._setup_shortcuts()
 
     def load_image(self) -> None:
         pixmap = QPixmap(self.image_path)
@@ -311,6 +325,16 @@ class AnnotationDialog(QDialog):
         self.scene.addItem(item)
         self.items[ann_id] = item
         self.add_table_row(item, confidence)
+        self._save_state()
+
+    def _add_annotation_from_dict(self, ann: dict) -> None:
+        bbox = ann.get("bbox", [])
+        if len(bbox) != 4:
+            return
+        class_id = int(ann.get("class_id", 0))
+        label = self.class_map.get(class_id, str(class_id))
+        rect = QRectF(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1])
+        self.add_annotation(rect, class_id, label, ann.get("confidence"))
 
     def add_table_row(self, item: AnnotationRectItem, confidence: float | None) -> None:
         row = self.table.rowCount()
@@ -339,6 +363,7 @@ class AnnotationDialog(QDialog):
 
     def on_item_changed(self, item: AnnotationRectItem) -> None:
         self.refresh_table()
+        self._save_state()
 
     def refresh_table(self) -> None:
         self.table.setRowCount(0)
@@ -357,6 +382,7 @@ class AnnotationDialog(QDialog):
                 self.scene.removeItem(item)
                 self.items.pop(ann_id, None)
         self.refresh_table()
+        self._save_state()
 
     def on_table_select(self) -> None:
         selected = self.table.selectedItems()
@@ -397,6 +423,7 @@ class AnnotationDialog(QDialog):
             item.class_id = class_id
             item.label = self.class_map.get(class_id, str(class_id))
             self.refresh_table()
+            self._save_state()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Delete:
@@ -421,6 +448,91 @@ class AnnotationDialog(QDialog):
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def _setup_shortcuts(self) -> None:
+        undo_shortcut = QShortcut(QKeySequence.Undo, self)
+        undo_shortcut.activated.connect(self.undo)
+        redo_shortcut = QShortcut(QKeySequence.Redo, self)
+        redo_shortcut.activated.connect(self.redo)
+        copy_shortcut = QShortcut(QKeySequence.Copy, self)
+        copy_shortcut.activated.connect(self.copy_selected)
+        paste_shortcut = QShortcut(QKeySequence.Paste, self)
+        paste_shortcut.activated.connect(self.paste)
+
+    def _save_state(self) -> None:
+        if self._restoring:
+            return
+        state = self._get_current_annotations()
+        if self._history and self._history[-1] == state:
+            return
+        self._history.append(state)
+        if len(self._history) > self._max_history:
+            self._history.pop(0)
+        self._redo_stack.clear()
+
+    def _get_current_annotations(self) -> list[dict]:
+        annotations = []
+        for item in self.items.values():
+            x1, y1, x2, y2 = item.bbox()
+            annotations.append(
+                {
+                    "class_id": item.class_id,
+                    "bbox": [x1, y1, x2, y2],
+                    "confidence": None,
+                }
+            )
+        return annotations
+
+    def _restore_state(self, state: list[dict]) -> None:
+        self._restoring = True
+        for item in list(self.items.values()):
+            self.scene.removeItem(item)
+        self.items.clear()
+        self.table.setRowCount(0)
+        self._next_id = 0
+        for ann in state:
+            self._add_annotation_from_dict(ann)
+        self.refresh_table()
+        self._restoring = False
+
+    def undo(self) -> None:
+        if len(self._history) > 1:
+            current = self._history.pop()
+            self._redo_stack.append(current)
+            self._restore_state(self._history[-1])
+
+    def redo(self) -> None:
+        if self._redo_stack:
+            state = self._redo_stack.pop()
+            self._history.append(state)
+            self._restore_state(state)
+
+    def copy_selected(self) -> None:
+        selected = self.scene.selectedItems()
+        if not selected:
+            return
+        item = selected[0]
+        if isinstance(item, AnnotationRectItem):
+            x1, y1, x2, y2 = item.bbox()
+            self._clipboard = [
+                {
+                    "class_id": item.class_id,
+                    "bbox": [x1, y1, x2, y2],
+                    "confidence": None,
+                }
+            ]
+
+    def paste(self) -> None:
+        if not self._clipboard:
+            return
+        offset = 5
+        for ann in self._clipboard:
+            bbox = ann["bbox"]
+            new_bbox = [bbox[0] + offset, bbox[1] + offset, bbox[2] + offset, bbox[3] + offset]
+            ann_copy = dict(ann)
+            ann_copy["bbox"] = new_bbox
+            self._add_annotation_from_dict(ann_copy)
+        self._save_state()
 
     def save_labels(self) -> None:
         if not self.items:

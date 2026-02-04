@@ -29,6 +29,8 @@ from core import (
     build_val_split,
     infer_and_count,
     train_yolov8_stream,
+    train_yolov8_stream_with_process,
+    infer_batch,
     get_run_outputs,
     export_xanylabeling_json,
     save_dataset_report,
@@ -64,6 +66,7 @@ VERSION = _read_version()
 # Global state for training logs
 training_logs: list[str] = []
 is_training: bool = False
+training_process = None
 
 # Image cache for faster reloading
 _image_cache: dict[str, Image.Image] = {}
@@ -351,6 +354,16 @@ def check_dataset_handler(yaml_path: str) -> str:
         return f"❌ Error: {str(e)}"
 
 
+def parse_training_progress(line: str) -> tuple[int, int] | None:
+    """从训练日志中解析进度 (current_epoch, total_epochs)"""
+    import re
+
+    match = re.search(r"Epoch\s+(\d+)/(\d+)", line)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    return None
+
+
 def train_model_stream(
     data_yaml: str,
     model_name: str,
@@ -362,7 +375,7 @@ def train_model_stream(
     limit_val: int,
 ) -> Iterator[str]:
     """Stream training logs."""
-    global is_training, training_logs
+    global is_training, training_logs, training_process
 
     if not data_yaml or not Path(data_yaml).exists():
         yield "❌ Error: Dataset YAML does not exist."
@@ -375,7 +388,7 @@ def train_model_stream(
     yield "🚀 Starting training...\n" + "=" * 50 + "\n"
 
     try:
-        for line in train_yolov8_stream(
+        proc, log_iterator = train_yolov8_stream_with_process(
             data_yaml=data_yaml,
             model_name=model_name,
             epochs=epochs,
@@ -385,17 +398,41 @@ def train_model_stream(
             limit_train_images=limit_train if limit_train > 0 else 0,
             limit_val_images=limit_val if limit_val > 0 else 0,
             remap_classes=False,
-        ):
+        )
+        training_process = proc
+        current_epoch = 0
+        total_epochs = epochs
+
+        for line in log_iterator:
+            if not is_training:
+                break
             # Clean ANSI codes
             import re
 
             clean_line = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line)
             training_logs.append(clean_line)
             elapsed = time.time() - start_time
-            yield (
-                f"⏱️ Elapsed: {int(elapsed // 60):02d}:{int(elapsed % 60):02d}\n"
-                + "\n".join(training_logs[-50:])
-            )  # Show last 50 lines
+            progress = parse_training_progress(clean_line)
+            if progress:
+                current_epoch, total_epochs = progress
+
+            if current_epoch > 0:
+                eta_seconds = (elapsed / current_epoch) * (total_epochs - current_epoch)
+                eta_str = f"{int(eta_seconds // 60)}分{int(eta_seconds % 60)}秒"
+            else:
+                eta_str = "计算中..."
+
+            progress_pct = (current_epoch / total_epochs * 100) if total_epochs > 0 else 0
+            progress_bar = f"[{'█' * int(progress_pct // 5)}{'░' * (20 - int(progress_pct // 5))}]"
+
+            header = (
+                f"📊 训练进度: {progress_bar} {progress_pct:.1f}%\n"
+                f"⏱️ 已用时: {int(elapsed // 60):02d}:{int(elapsed % 60):02d}\n"
+                f"⏳ 预计剩余: {eta_str}\n"
+                f"📈 当前轮次: {current_epoch}/{total_epochs}\n"
+                f"{'=' * 50}\n"
+            )
+            yield header + "\n".join(training_logs[-30:])
 
         outputs = get_run_outputs("runs/detect", "cells")
         best_path = outputs.get("best", "")
@@ -411,13 +448,32 @@ def train_model_stream(
         yield f"\n❌ Training error: {str(e)}"
     finally:
         is_training = False
+        training_process = None
 
 
 def stop_training() -> str:
-    """Stop the training process (note: this just flags, doesn't actually stop the subprocess)."""
-    global is_training
+    """真正终止训练进程"""
+    global is_training, training_process
     is_training = False
-    return "⚠️ Stop requested. Training will stop after current epoch."
+    if training_process is not None:
+        try:
+            import signal
+            import os
+
+            if os.name == "nt":
+                training_process.terminate()
+            else:
+                os.killpg(os.getpgid(training_process.pid), signal.SIGTERM)
+            training_process.wait(timeout=5)
+            return "✅ 训练已停止"
+        except Exception as e:
+            try:
+                training_process.kill()
+                return f"⚠️ 训练已强制终止: {e}"
+            except Exception:
+                return f"❌ 无法终止训练进程: {e}"
+
+    return "⚠️ 没有正在运行的训练任务"
 
 
 # ============================================================================
@@ -659,6 +715,54 @@ def export_to_xanylabeling(
 
     except Exception as e:
         return f"❌ Error: {str(e)}"
+
+
+def run_batch_inference(
+    input_dir: str,
+    output_dir: str,
+    weights_path: str,
+    imgsz: int,
+    conf: float,
+    iou: float,
+    device: str,
+) -> Iterator[tuple[str, str]]:
+    """批量推理生成器"""
+    if not input_dir or not Path(input_dir).exists():
+        yield "❌ 输入目录不存在", ""
+        return
+
+    _, cn_map = get_active_class_maps()
+
+    yield "🚀 开始批量推理...", ""
+
+    try:
+        results = infer_batch(
+            weights=weights_path,
+            source_dir=input_dir,
+            output_dir=output_dir,
+            imgsz=imgsz,
+            conf=conf,
+            iou=iou,
+            device=device,
+            label_mapping=cn_map,
+        )
+
+        summary = (
+            "✅ 批量推理完成!\n\n"
+            "📊 统计:\n"
+            f"- 处理图片数: {results['total_images']}\n"
+            f"- 检测细胞总数: {results['total_cells']}\n"
+            f"- CSV报告: {results['csv_path']}\n\n"
+            "📈 类别统计:"
+        )
+        for cls_id, count in sorted(results["summary"].items()):
+            name = cn_map.get(cls_id, f"Class {cls_id}")
+            summary += f"\n- {name}: {count}"
+
+        yield "✅ 完成", summary
+
+    except Exception as e:
+        yield f"❌ 错误: {str(e)}", ""
 
 
 # ============================================================================
@@ -1063,6 +1167,29 @@ def create_interface() -> gr.Blocks:
                         export_btn = gr.Button("📤 导出标注文件", variant="secondary", elem_classes=["accent"])
                         export_output = gr.Textbox(label="导出结果", interactive=False)
 
+            with gr.Row():
+                with gr.Group(elem_classes=["card"]):
+                    gr.Markdown("#### 批量推理")
+                    batch_input_dir = gr.Textbox(
+                        label="输入目录",
+                        placeholder="选择包含图片的目录",
+                    )
+                    batch_output_dir = gr.Textbox(
+                        label="输出目录",
+                        value=str(ROOT / "outputs" / "batch_infer"),
+                    )
+                    batch_progress = gr.Textbox(
+                        label="进度",
+                        value="等待开始...",
+                        interactive=False,
+                    )
+                    run_batch_btn = gr.Button("🚀 运行批量推理", variant="primary", elem_classes=["primary"])
+                    batch_results = gr.Textbox(
+                        label="批量推理结果",
+                        lines=10,
+                        interactive=False,
+                    )
+
             # Event handlers
             auto_find_btn.click(
                 fn=lambda: auto_find_weights(),
@@ -1100,6 +1227,20 @@ def create_interface() -> gr.Blocks:
                     preprocess_size,
                 ],
                 outputs=[export_output],
+            )
+
+            run_batch_btn.click(
+                fn=run_batch_inference,
+                inputs=[
+                    batch_input_dir,
+                    batch_output_dir,
+                    weights_input,
+                    infer_imgsz,
+                    infer_conf,
+                    infer_iou,
+                    infer_device,
+                ],
+                outputs=[batch_progress, batch_results],
             )
 
         # ========================================================================

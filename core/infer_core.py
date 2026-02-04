@@ -296,3 +296,115 @@ def infer_and_count(
     if return_dets:
         return vis_rgb, counts, total, detections
     return vis_rgb, counts, total
+
+
+def infer_batch(
+    weights: str,
+    source_dir: str,
+    output_dir: str,
+    imgsz: int = 640,
+    conf: float = 0.25,
+    iou: float = 0.45,
+    device: str = "auto",
+    label_mapping: dict[int, str] | None = None,
+    progress_callback: callable | None = None,
+) -> dict:
+    """
+    批量推理目录中的所有图片。
+
+    Args:
+        weights: 模型权重路径
+        source_dir: 输入图片目录
+        output_dir: 输出目录
+        imgsz: 推理图片尺寸
+        conf: 置信度阈值
+        iou: IoU阈值
+        device: 计算设备
+        label_mapping: 类别名称映射
+        progress_callback: 进度回调函数 (current, total, filename)
+
+    Returns:
+        dict: {
+            'total_images': int,
+            'total_cells': int,
+            'per_image_counts': {filename: {class_id: count}},
+            'summary': {class_id: total_count}
+        }
+    """
+    from pathlib import Path
+    from collections import Counter
+    import csv
+
+    IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
+
+    source_path = Path(source_dir)
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # 收集所有图片
+    images = [p for p in source_path.rglob("*") if p.suffix.lower() in IMAGE_EXTS]
+
+    results = {
+        "total_images": len(images),
+        "total_cells": 0,
+        "per_image_counts": {},
+        "summary": Counter(),
+    }
+
+    for i, img_path in enumerate(images):
+        if progress_callback:
+            progress_callback(i + 1, len(images), img_path.name)
+
+        try:
+            vis_img, counts, total, dets = infer_and_count(
+                weights=weights,
+                source_image=str(img_path),
+                imgsz=imgsz,
+                conf=conf,
+                iou=iou,
+                device=device,
+                return_dets=True,
+                label_mapping=label_mapping,
+            )
+
+            # 保存结果图片
+            out_img = output_path / f"{img_path.stem}_pred.jpg"
+            vis_img.save(out_img, quality=95)
+
+            # 保存标注JSON
+            out_json = output_path / f"{img_path.stem}.json"
+            export_xanylabeling_json(
+                image_path=str(img_path),
+                image_size=vis_img.size,
+                detections=dets,
+                output_json=str(out_json),
+                label_mapping=label_mapping,
+            )
+
+            results["per_image_counts"][img_path.name] = dict(counts)
+            results["total_cells"] += total
+            results["summary"].update(counts)
+
+        except Exception as e:
+            results["per_image_counts"][img_path.name] = {"error": str(e)}
+
+    # 生成CSV汇总报告
+    csv_path = output_path / "summary_report.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            ["文件名", "总细胞数"] + [f"类别{k}" for k in sorted(results["summary"].keys())]
+        )
+        for filename, counts in results["per_image_counts"].items():
+            if "error" in counts:
+                writer.writerow([filename, "ERROR", counts["error"]])
+            else:
+                row = [filename, sum(counts.values())]
+                for k in sorted(results["summary"].keys()):
+                    row.append(counts.get(k, 0))
+                writer.writerow(row)
+
+    results["summary"] = dict(results["summary"])
+    results["csv_path"] = str(csv_path)
+
+    return results

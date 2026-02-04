@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 from PIL.ImageQt import ImageQt
 
-from core import infer_and_count
+from core import infer_and_count, infer_batch
 from core.constants import CLASS_NAMES_CN, DEVICE_OPTIONS
 from ui.annotation_tool import AnnotationDialog
 from ui.utils import default_weights_path, find_latest_model, get_setting, project_root, set_setting
@@ -204,6 +204,58 @@ class InferenceWorker(QThread):
         return vis_img, counts, total, dets
 
 
+class BatchInferenceWorker(QThread):
+    progress = Signal(str)
+    finished = Signal(str)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        weights: str,
+        source_dir: str,
+        output_dir: str,
+        imgsz: int,
+        conf: float,
+        iou: float,
+        device: str,
+        label_mapping: dict[int, str] | None = None,
+    ):
+        super().__init__()
+        self.weights = weights
+        self.source_dir = source_dir
+        self.output_dir = output_dir
+        self.imgsz = imgsz
+        self.conf = conf
+        self.iou = iou
+        self.device = device
+        self.label_mapping = label_mapping
+
+    def run(self) -> None:
+        try:
+            def cb(current, total, filename):
+                self.progress.emit(f"{current}/{total} - {filename}")
+
+            results = infer_batch(
+                weights=self.weights,
+                source_dir=self.source_dir,
+                output_dir=self.output_dir,
+                imgsz=self.imgsz,
+                conf=self.conf,
+                iou=self.iou,
+                device=self.device,
+                label_mapping=self.label_mapping,
+                progress_callback=cb,
+            )
+            summary = (
+                f"Total images: {results.get('total_images', 0)}\n"
+                f"Total cells: {results.get('total_cells', 0)}\n"
+                f"CSV: {results.get('csv_path', '')}"
+            )
+            self.finished.emit(summary)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class InferencePage(QWidget):
     model_changed = Signal(str)
     device_changed = Signal(str)
@@ -336,6 +388,26 @@ class InferencePage(QWidget):
         control_layout.addWidget(self.total_label)
         control_layout.addWidget(self.status_label)
 
+        self.batch_group = QGroupBox("Batch Inference")
+        batch_layout = QVBoxLayout(self.batch_group)
+        self.batch_input = QLineEdit()
+        self.batch_output = QLineEdit(str(project_root() / "outputs" / "batch_infer"))
+        self.batch_run_btn = QPushButton("Run Batch Inference")
+        self.batch_progress = QLabel("Progress: Idle")
+        self.batch_result = QLabel("")
+
+        batch_layout.addWidget(QLabel("Input dir:"))
+        batch_layout.addWidget(self.batch_input)
+        batch_layout.addWidget(QLabel("Output dir:"))
+        batch_layout.addWidget(self.batch_output)
+        batch_layout.addWidget(self.batch_run_btn)
+        batch_layout.addWidget(self.batch_progress)
+        batch_layout.addWidget(self.batch_result)
+
+        self.batch_run_btn.clicked.connect(self.run_batch_inference)
+
+        control_layout.addWidget(self.batch_group)
+
         # Right panel (results)
         result_panel = QGroupBox("Results")
         result_layout = QVBoxLayout(result_panel)
@@ -368,6 +440,7 @@ class InferencePage(QWidget):
         layout.addLayout(main, 1)
 
         self.worker: InferenceWorker | None = None
+        self.batch_worker: BatchInferenceWorker | None = None
         self.last_image_path: str | None = None
         self.last_detections: list[dict] = []
 
@@ -472,6 +545,43 @@ class InferencePage(QWidget):
         dets = getattr(self, "last_detections", [])
         dialog = AnnotationDialog(self.last_image_path, dets, self)
         dialog.exec()
+
+    def run_batch_inference(self) -> None:
+        weights = self.weights_edit.text().strip()
+        source_dir = self.batch_input.text().strip()
+        output_dir = self.batch_output.text().strip()
+        if not weights or not source_dir or not output_dir:
+            self.batch_progress.setText("Progress: missing inputs")
+            return
+        self.batch_progress.setText("Progress: running...")
+        self.batch_result.setText("")
+        self.batch_run_btn.setEnabled(False)
+        self.batch_worker = BatchInferenceWorker(
+            weights=weights,
+            source_dir=source_dir,
+            output_dir=output_dir,
+            imgsz=int(self.imgsz.value()),
+            conf=float(self.conf.value()),
+            iou=float(self.iou.value()),
+            device=self.device.currentText(),
+            label_mapping=CLASS_NAMES_CN,
+        )
+        self.batch_worker.progress.connect(self.on_batch_progress)
+        self.batch_worker.finished.connect(self.on_batch_finished)
+        self.batch_worker.failed.connect(self.on_batch_failed)
+        self.batch_worker.start()
+
+    def on_batch_progress(self, message: str) -> None:
+        self.batch_progress.setText(f"Progress: {message}")
+
+    def on_batch_finished(self, summary: str) -> None:
+        self.batch_progress.setText("Progress: completed")
+        self.batch_result.setText(summary)
+        self.batch_run_btn.setEnabled(True)
+
+    def on_batch_failed(self, message: str) -> None:
+        self.batch_progress.setText(f"Progress: failed ({message})")
+        self.batch_run_btn.setEnabled(True)
 
     def set_dataset_root(self, dataset_root: str) -> None:
         # Align weights path with dashboard dataset root's parent (project root)

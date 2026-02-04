@@ -549,3 +549,91 @@ def train_yolov8_stream(
     proc.wait()
     if proc.returncode != 0:
         yield f"\n[ERROR] Training process exited with code {proc.returncode}\n"
+
+
+def train_yolov8_stream_with_process(
+    data_yaml: str,
+    model_name: str = "yolov8n.pt",
+    epochs: int = 100,
+    imgsz: int = 640,
+    batch: int = 16,
+    workers: int = 8,
+    device: str = "auto",
+    project: str = "runs/detect",
+    name: str = "cells",
+    seed: int = 42,
+    resume: bool = False,
+    limit_train_images: int = 0,
+    limit_val_images: int = 0,
+    remap_classes: bool = False,
+    freeze_splits: bool = True,
+) -> tuple[subprocess.Popen, "list[str] | None"]:
+    """
+    启动训练并返回进程对象和日志迭代器。
+
+    Returns:
+        (process, log_iterator): 进程对象和日志行迭代器
+    """
+    import os
+
+    cmd = [
+        sys.executable,
+        "scripts/train.py",
+        "--data",
+        data_yaml,
+        "--model",
+        model_name,
+        "--epochs",
+        str(epochs),
+        "--imgsz",
+        str(imgsz),
+        "--batch",
+        str(batch),
+        "--workers",
+        str(workers),
+        "--device",
+        device,
+        "--project",
+        project,
+        "--name",
+        name,
+        "--seed",
+        str(seed),
+    ]
+    if resume:
+        cmd.append("--resume")
+    if limit_train_images > 0:
+        cmd += ["--limit-train", str(limit_train_images)]
+    if limit_val_images > 0:
+        cmd += ["--limit-val", str(limit_val_images)]
+    if remap_classes:
+        cmd += ["--remap-classes"]
+    if not freeze_splits:
+        cmd += ["--no-freeze-splits"]
+
+    root = Path(__file__).resolve().parents[1]
+
+    kwargs = {
+        "cwd": str(root),
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "bufsize": 1,
+    }
+    if os.name != "nt":
+        kwargs["preexec_fn"] = os.setsid
+
+    proc = subprocess.Popen(cmd, **kwargs)
+
+    def log_generator():
+        if proc.stdout is None:
+            return
+        for line in proc.stdout:
+            yield line
+        proc.wait()
+        if proc.returncode != 0:
+            yield f"\n[ERROR] Training process exited with code {proc.returncode}\n"
+
+    return proc, log_generator()
