@@ -9,6 +9,7 @@ import os
 import sys
 import json
 import time
+import socket
 import threading
 from pathlib import Path
 from collections import Counter
@@ -114,6 +115,23 @@ def find_latest_model(runs_dir: str | Path) -> str | None:
 
     best_candidates.sort(reverse=True)
     return best_candidates[0][1]
+
+
+def find_available_port(host: str, start: int = 7860, end: int = 7959) -> int | None:
+    """Find an available TCP port on host within [start, end], then fallback to ephemeral."""
+    for port in range(start, end + 1):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind((host, port))
+            except OSError:
+                continue
+            return port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((host, 0))
+        except OSError:
+            return None
+        return int(sock.getsockname()[1])
 
 
 def format_dataset_stats(stats: dict) -> str:
@@ -1314,10 +1332,17 @@ if __name__ == "__main__":
     demo.queue(max_size=20)
 
     server_name = os.getenv("GRADIO_SERVER_NAME", "0.0.0.0")
-    server_port = int(os.getenv("GRADIO_SERVER_PORT", "7860"))
-    demo.launch(
-        server_name=server_name,
-        server_port=server_port,
-        share=False,
-        show_error=True,
-    )
+    server_port_env = os.getenv("GRADIO_SERVER_PORT")
+    launch_kwargs = {
+        "server_name": server_name,
+        "share": False,
+        "show_error": True,
+    }
+    if server_port_env:
+        launch_kwargs["server_port"] = int(server_port_env)
+    else:
+        available_port = find_available_port(server_name)
+        if available_port is not None:
+            launch_kwargs["server_port"] = available_port
+
+    demo.launch(**launch_kwargs)
